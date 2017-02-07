@@ -2,7 +2,7 @@ import re
 
 uniquePorts=set()
 
-wikiFile=open("../Data/wikiPorts.csv")
+wikiFile=open("../Data/uniquePorts.csv")
 
 for line in wikiFile:
     words=re.split("\W+",line)
@@ -13,7 +13,7 @@ for line in wikiFile:
 
 wikiFile.close()
 
-neoFile=open("../Data/neoPorts.csv")
+neoFile=open("../Data/uniquePorts2.csv")
 
 for line in neoFile:
     words=re.split("\W+",line)
@@ -24,8 +24,9 @@ for line in neoFile:
 
 neoFile.close()
 
+
 print len(uniquePorts)
-uniqueFile=open("../Data/uniquePorts.csv","w")
+uniqueFile=open("../Data/finalPorts.csv","w")
 
 for element in uniquePorts:
     uniqueFile.write(element+"\n")
