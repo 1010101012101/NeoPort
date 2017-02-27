@@ -314,7 +314,7 @@ else:
 
 decoder_params["bias"]=model.add_parameters((VOCAB_SIZE_EN))
 
-trainer=dy.AdamTrainer(model)
+trainer=dy.SimpleSGDTrainer(model)
 
 totalSentences=0
 for epochId in xrange(NUM_EPOCHS):    
@@ -354,7 +354,7 @@ editDistance=0.0
 for validSentenceId,validSentence in enumerate(valid_sentences):
     valid_sentence_de=validSentence[0]
     valid_sentence_en=validSentence[1]
-    validLoss,valid_sentence_en_hat=beamDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,valid_sentence_de,downstream=True,k=2)
+    validLoss,valid_sentence_en_hat=greedyDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,valid_sentence_de,downstream=True)
 
     originalWord="".join([reverse_wids[c] for c in valid_sentence_en[:-1]])
     outputWord="".join([reverse_wids[c] for c in valid_sentence_en_hat[:-1]])
