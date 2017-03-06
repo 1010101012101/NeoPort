@@ -10,6 +10,14 @@ import datetime
 import nltk
 import copy
 
+#Config Definition
+EMB_SIZE=50
+LAYER_DEPTH=1
+HIDDEN_SIZE=100
+NUM_EPOCHS=10
+STOP=0
+SEPARATOR=1
+
 def attend(encoder_outputs,state_factor_matrix):
     miniBatchLength=state_factor_matrix.npvalue().shape[1]
     encoderOutputLength=state_factor_matrix.npvalue().shape[0]
@@ -117,7 +125,7 @@ def beamDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,sent
 
 
 
-def greedyDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,sentence_de,downstream=False,GRU=False,hyperParams=None):
+def greedyDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,sentence_de,downstream=False,GRU=False):
     dy.renew_cg()
     total_words=len(sentence_en)
     encoder_lookup=encoder_params["lookup"]
@@ -163,7 +171,7 @@ def greedyDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,se
     currentToken=None
     englishSequence=[]
 
-    while currentToken!=hyperParams.STOP and len(englishSequence)<len(sentence_de)+10:
+    while currentToken!=STOP and len(englishSequence)<len(sentence_de)+10:
         #Calculate loss and append to the losses array
         scores=None
         if downstream:
@@ -276,39 +284,19 @@ class Config:
         self.sharing=sharing
         self.GRU=GRU
 
-class HyperParams:
-    EMB_SIZE=None
-    LAYER_DEPTH=None
-    HIDDEN_SIZE=None
-    NUM_EPOCHS=None
-    STOP=None
-    SEPARATOR=None
 
-    def __init__(self,EMB_SIZE=50,LAYER_DEPTH=1,HIDDEN_SIZE=100,NUM_EPOCHS=10,STOP=0,SEPARATOR=1):
-        #Hyperparameter Definition
-        self.EMB_SIZE=EMB_SIZE
-        self.LAYER_DEPTH=LAYER_DEPTH
-        self.HIDDEN_SIZE=HIDDEN_SIZE
-        self.NUM_EPOCHS=NUM_EPOCHS
-        self.STOP=STOP
-        self.SEPARATOR=SEPARATOR
-
-READ_OPTION="NORMALDISJOINT"
+READ_OPTION="NORMAL"
 downstream=True
 sharing=False
 GRU=False
 
-
 config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU)
-hyperParams=HyperParams()
+
 
 if config.READ_OPTION=="NORMAL":
     train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(trainingPoints=700,validPoints=400)
-elif config.READ_OPTION=="NORMALDISJOINT":
-    train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getDataDisjoint(trainingPoints=500,validPoints=200)
 elif config.READ_OPTION=="KNIGHTHOLDOUT":
     train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getDataKnightHoldOut(trainingPoints=1000)
-
 
 reverse_wids=readData.reverseDictionary(wids)
 
@@ -318,6 +306,7 @@ print len(train_sentences_en)
 print len(valid_sentences_de)
 print len(valid_sentences_en)
 
+
 VOCAB_SIZE_DE=len(wids)
 VOCAB_SIZE_EN=VOCAB_SIZE_DE
 
@@ -325,40 +314,38 @@ VOCAB_SIZE_EN=VOCAB_SIZE_DE
 train_sentences=zip(train_sentences_de,train_sentences_en)
 valid_sentences=zip(valid_sentences_de,valid_sentences_en)
 
-
-
 #Specify model
 model=dy.Model()
 
 if config.GRU:
-    encoder=dy.GRUBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
-    revcoder=dy.GRUBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
-    decoder=dy.GRUBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE+hyperParams.HIDDEN_SIZE,hyperParams.HIDDEN_SIZE,model)
+    encoder=dy.GRUBuilder(LAYER_DEPTH,EMB_SIZE,HIDDEN_SIZE,model)
+    revcoder=dy.GRUBuilder(LAYER_DEPTH,EMB_SIZE,HIDDEN_SIZE,model)
+    decoder=dy.GRUBuilder(LAYER_DEPTH,EMB_SIZE+HIDDEN_SIZE,HIDDEN_SIZE,model)
 else:
-    encoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
-    revcoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
-    decoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE+hyperParams.HIDDEN_SIZE,hyperParams.HIDDEN_SIZE,model)
+    encoder=dy.LSTMBuilder(LAYER_DEPTH,EMB_SIZE,HIDDEN_SIZE,model)
+    revcoder=dy.LSTMBuilder(LAYER_DEPTH,EMB_SIZE,HIDDEN_SIZE,model)
+    decoder=dy.LSTMBuilder(LAYER_DEPTH,EMB_SIZE+HIDDEN_SIZE,HIDDEN_SIZE,model)
 
 encoder_params={}
-encoder_params["lookup"]=model.add_lookup_parameters((VOCAB_SIZE_DE,hyperParams.EMB_SIZE))
+encoder_params["lookup"]=model.add_lookup_parameters((VOCAB_SIZE_DE,EMB_SIZE))
 
 decoder_params={}
 if config.sharing:
     decoder_params["lookup"]=encoder_params["lookup"]
 else:
-    decoder_params["lookup"]=model.add_lookup_parameters((VOCAB_SIZE_EN,hyperParams.EMB_SIZE))
+    decoder_params["lookup"]=model.add_lookup_parameters((VOCAB_SIZE_EN,EMB_SIZE))
 
 if config.downstream:
-    decoder_params["R"]=model.add_parameters((VOCAB_SIZE_EN,2*hyperParams.HIDDEN_SIZE))
+    decoder_params["R"]=model.add_parameters((VOCAB_SIZE_EN,2*HIDDEN_SIZE))
 else:
-    decoder_params["R"]=model.add_parameters((VOCAB_SIZE_EN,hyperParams.HIDDEN_SIZE))
+    decoder_params["R"]=model.add_parameters((VOCAB_SIZE_EN,HIDDEN_SIZE))
 
 decoder_params["bias"]=model.add_parameters((VOCAB_SIZE_EN))
 
 trainer=dy.SimpleSGDTrainer(model)
 
 totalSentences=0
-for epochId in xrange(hyperParams.NUM_EPOCHS):    
+for epochId in xrange(NUM_EPOCHS):    
     random.shuffle(train_sentences)
     for sentenceId,sentence in enumerate(train_sentences):
         totalSentences+=1
@@ -397,7 +384,7 @@ editDistance=0.0
 for validSentenceId,validSentence in enumerate(valid_sentences):
     valid_sentence_de=validSentence[0]
     valid_sentence_en=validSentence[1]
-    validLoss,valid_sentence_en_hat=greedyDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,valid_sentence_de,downstream=config.downstream,GRU=config.GRU,hyperParams=hyperParams)
+    validLoss,valid_sentence_en_hat=greedyDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,valid_sentence_de,downstream=config.downstream,GRU=config.GRU)
 
     originalWord="".join([reverse_wids[c] for c in valid_sentence_en[:-1]])
     outputWord="".join([reverse_wids[c] for c in valid_sentence_en_hat[:-1]])
