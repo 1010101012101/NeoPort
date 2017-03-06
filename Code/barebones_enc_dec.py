@@ -117,152 +117,7 @@ def beamDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,sent
 
 
 
-def greedyDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,sentence_de,downstream=False,GRU=False,hyperParams=None):
-    dy.renew_cg()
-    total_words=len(sentence_en)
-    encoder_lookup=encoder_params["lookup"]
-    decoder_lookup=decoder_params["lookup"]
-    R=dy.parameter(decoder_params["R"])
-    bias=dy.parameter(decoder_params["bias"])
 
-    sentence_de_forward=sentence_de
-    sentence_de_reverse=sentence_de[::-1]
-
-    s=encoder.initial_state()
-    inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_forward]
-    states=s.add_inputs(inputs)
-    encoder_outputs=[s.output() for s in states]
-
-    s_reverse=revcoder.initial_state()
-    inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_reverse]
-    states_reverse=s_reverse.add_inputs(inputs)
-    revcoder_outputs=[s.output() for s in states_reverse]
-
-    final_coding_output=encoder_outputs[-1]+revcoder_outputs[-1]
-    final_state=states[-1].s()
-    final_state_reverse=states_reverse[-1].s()
-
-    if GRU:
-        final_coding_state=final_state_reverse+final_state
-    else:
-        final_coding_state=((final_state_reverse[0]+final_state[0]),(final_state_reverse[1]+final_state[1]))
-    final_combined_outputs=[revcoder_output+encoder_output for revcoder_output,encoder_output in zip(revcoder_outputs[::-1],encoder_outputs)]
-
-    s_init=decoder.initial_state().set_s(final_state_reverse)
-    o_init=s_init.output() 
-    alpha_init=dy.softmax(dy.concatenate([dy.dot_product(o_init,final_combined_output) for final_combined_output in final_combined_outputs]))
-    c_init=attend_vector(final_combined_outputs,alpha_init)
-    
-    s_0=s_init
-    o_0=o_init
-    alpha_0=alpha_init
-    c_0=c_init
-    
-
-    losses=[]
-    currentToken=None
-    englishSequence=[]
-
-    while currentToken!=hyperParams.STOP and len(englishSequence)<len(sentence_de)+10:
-        #Calculate loss and append to the losses array
-        scores=None
-        if downstream:
-            scores=R*dy.concatenate([o_0,c_0])+bias
-        else:
-            scores=R*o_0+bias
-        currentToken=np.argmax(scores.npvalue())
-        loss=dy.pickneglogsoftmax(scores,currentToken)
-        losses.append(loss)
-        englishSequence.append(currentToken)
-
-        #Take in input
-        i_t=dy.concatenate([dy.lookup(decoder_lookup,currentToken),c_0])
-        s_t=s_0.add_input(i_t)
-        o_t=s_t.output()
-        alpha_t=dy.softmax(dy.concatenate([dy.dot_product(o_t,final_combined_output) for final_combined_output in final_combined_outputs]))
-        c_t=attend_vector(final_combined_outputs,alpha_t)
-        
-        #Prepare for the next iteration
-        s_0=s_t
-        o_0=o_t
-        c_0=c_t
-        alpha_0=alpha_t
-
-    total_loss=dy.esum(losses)
-    return total_loss,englishSequence
-
-
-
-def do_one_example(model,encoder,revcoder,decoder,encoder_params,decoder_params,sentence_de,sentence_en,downstream=False,GRU=False):
-    dy.renew_cg()
-    total_words=len(sentence_en)
-    encoder_lookup=encoder_params["lookup"]
-    decoder_lookup=decoder_params["lookup"]
-    R=dy.parameter(decoder_params["R"])
-    bias=dy.parameter(decoder_params["bias"])
-
-    sentence_de_forward=sentence_de
-    sentence_de_reverse=sentence_de[::-1]
-
-    s=encoder.initial_state()
-    inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_forward]
-    states=s.add_inputs(inputs)
-    encoder_outputs=[s.output() for s in states]
-
-    s_reverse=revcoder.initial_state()
-    inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_reverse]
-    states_reverse=s_reverse.add_inputs(inputs)
-    revcoder_outputs=[s.output() for s in states_reverse]
-
-    final_coding_output=encoder_outputs[-1]+revcoder_outputs[-1]
-    final_state=states[-1].s()
-    final_state_reverse=states_reverse[-1].s()
-
-    if GRU:
-        final_coding_state=final_state_reverse+final_state
-    else:
-        final_coding_state=((final_state_reverse[0]+final_state[0]),(final_state_reverse[1]+final_state[1]))
-    final_combined_outputs=[revcoder_output+encoder_output for revcoder_output,encoder_output in zip(revcoder_outputs[::-1],encoder_outputs)]
-
-    s_init=decoder.initial_state().set_s(final_state_reverse)
-    o_init=s_init.output() 
-    alpha_init=dy.softmax(dy.concatenate([dy.dot_product(o_init,final_combined_output) for final_combined_output in final_combined_outputs]))
-    c_init=attend_vector(final_combined_outputs,alpha_init)
-
-    
-    s_0=s_init
-    o_0=o_init
-    alpha_0=alpha_init
-    c_0=c_init
-    
-
-    losses=[]
-    
-    for en in sentence_en:
-        #Calculate loss and append to the losses array
-        scores=None
-        if downstream:
-            scores=R*dy.concatenate([o_0,c_0])+bias
-        else:
-            scores=R*o_0+bias
-        loss=dy.pickneglogsoftmax(scores,en)
-        losses.append(loss)
-
-        #Take in input
-        i_t=dy.concatenate([dy.lookup(decoder_lookup,en),c_0])
-        s_t=s_0.add_input(i_t)
-        o_t=s_t.output()
-        alpha_t=dy.softmax(dy.concatenate([dy.dot_product(o_t,final_combined_output) for final_combined_output in final_combined_outputs]))
-        c_t=attend_vector(final_combined_outputs,alpha_t)
-        
-        #Prepare for the next iteration
-        s_0=s_t
-        o_0=o_t
-        c_0=c_t
-        alpha_0=alpha_t
-
-    total_loss=dy.esum(losses)
-    return total_loss,total_words
 
 class Config:
     READ_OPTION="NORMAL"
@@ -293,135 +148,325 @@ class HyperParams:
         self.STOP=STOP
         self.SEPARATOR=SEPARATOR
 
-READ_OPTION="NORMALDISJOINT"
-downstream=True
-sharing=False
-GRU=False
+class Model:
+    def greedyDecode(self,sentence_de):
+        model=self.model
+        encoder=self.encoder
+        revcoder=self.revcoder
+        decoder=self.decoder
+        encoder_params=self.encoder_params
+        decoder_params=self.decoder_params
+        downstream=self.config.downstream
+        GRU=self.config.GRU
+        hyperParams=self.hyperParams
+
+        dy.renew_cg() 
+        encoder_lookup=encoder_params["lookup"]
+        decoder_lookup=decoder_params["lookup"]
+        R=dy.parameter(decoder_params["R"])
+        bias=dy.parameter(decoder_params["bias"])
+
+        sentence_de_forward=sentence_de
+        sentence_de_reverse=sentence_de[::-1]
+
+        s=encoder.initial_state()
+        inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_forward]
+        states=s.add_inputs(inputs)
+        encoder_outputs=[s.output() for s in states]
+
+        s_reverse=revcoder.initial_state()
+        inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_reverse]
+        states_reverse=s_reverse.add_inputs(inputs)
+        revcoder_outputs=[s.output() for s in states_reverse]
+
+        final_coding_output=encoder_outputs[-1]+revcoder_outputs[-1]
+        final_state=states[-1].s()
+        final_state_reverse=states_reverse[-1].s()
+
+        if GRU:
+            final_coding_state=final_state_reverse+final_state
+        else:
+            final_coding_state=((final_state_reverse[0]+final_state[0]),(final_state_reverse[1]+final_state[1]))
+        final_combined_outputs=[revcoder_output+encoder_output for revcoder_output,encoder_output in zip(revcoder_outputs[::-1],encoder_outputs)]
+
+        s_init=decoder.initial_state().set_s(final_state_reverse)
+        o_init=s_init.output() 
+        alpha_init=dy.softmax(dy.concatenate([dy.dot_product(o_init,final_combined_output) for final_combined_output in final_combined_outputs]))
+        c_init=attend_vector(final_combined_outputs,alpha_init)
+        
+        s_0=s_init
+        o_0=o_init
+        alpha_0=alpha_init
+        c_0=c_init
+        
+
+        losses=[]
+        currentToken=None
+        englishSequence=[]
+
+        while currentToken!=hyperParams.STOP and len(englishSequence)<len(sentence_de)+10:
+            #Calculate loss and append to the losses array
+            scores=None
+            if downstream:
+                scores=R*dy.concatenate([o_0,c_0])+bias
+            else:
+                scores=R*o_0+bias
+            currentToken=np.argmax(scores.npvalue())
+            loss=dy.pickneglogsoftmax(scores,currentToken)
+            losses.append(loss)
+            englishSequence.append(currentToken)
+
+            #Take in input
+            i_t=dy.concatenate([dy.lookup(decoder_lookup,currentToken),c_0])
+            s_t=s_0.add_input(i_t)
+            o_t=s_t.output()
+            alpha_t=dy.softmax(dy.concatenate([dy.dot_product(o_t,final_combined_output) for final_combined_output in final_combined_outputs]))
+            c_t=attend_vector(final_combined_outputs,alpha_t)
+            
+            #Prepare for the next iteration
+            s_0=s_t
+            o_0=o_t
+            c_0=c_t
+            alpha_0=alpha_t
+
+        total_loss=dy.esum(losses)
+        return total_loss,englishSequence
 
 
-config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU)
-hyperParams=HyperParams()
 
-if config.READ_OPTION=="NORMAL":
-    train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(trainingPoints=700,validPoints=400)
-elif config.READ_OPTION=="NORMALDISJOINT":
-    train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getDataDisjoint(trainingPoints=500,validPoints=200)
-elif config.READ_OPTION=="KNIGHTHOLDOUT":
-    train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getDataKnightHoldOut(trainingPoints=1000)
+    def do_one_example(self,sentence_de,sentence_en):
+        model=self.model
+        encoder=self.encoder
+        revcoder=self.revcoder
+        decoder=self.decoder
+        encoder_params=self.encoder_params
+        decoder_params=self.decoder_params
+        downstream=self.config.downstream
+        GRU=self.config.GRU
 
+        dy.renew_cg()
+        total_words=len(sentence_en)
+        encoder_lookup=encoder_params["lookup"]
+        decoder_lookup=decoder_params["lookup"]
+        R=dy.parameter(decoder_params["R"])
+        bias=dy.parameter(decoder_params["bias"])
 
-reverse_wids=readData.reverseDictionary(wids)
+        sentence_de_forward=sentence_de
+        sentence_de_reverse=sentence_de[::-1]
 
-print len(train_sentences_de)
-print len(train_sentences_en)
+        s=encoder.initial_state()
+        inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_forward]
+        states=s.add_inputs(inputs)
+        encoder_outputs=[s.output() for s in states]
 
-print len(valid_sentences_de)
-print len(valid_sentences_en)
+        s_reverse=revcoder.initial_state()
+        inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_reverse]
+        states_reverse=s_reverse.add_inputs(inputs)
+        revcoder_outputs=[s.output() for s in states_reverse]
 
-VOCAB_SIZE_DE=len(wids)
-VOCAB_SIZE_EN=VOCAB_SIZE_DE
+        final_coding_output=encoder_outputs[-1]+revcoder_outputs[-1]
+        final_state=states[-1].s()
+        final_state_reverse=states_reverse[-1].s()
 
+        if GRU:
+            final_coding_state=final_state_reverse+final_state
+        else:
+            final_coding_state=((final_state_reverse[0]+final_state[0]),(final_state_reverse[1]+final_state[1]))
+        final_combined_outputs=[revcoder_output+encoder_output for revcoder_output,encoder_output in zip(revcoder_outputs[::-1],encoder_outputs)]
 
-train_sentences=zip(train_sentences_de,train_sentences_en)
-valid_sentences=zip(valid_sentences_de,valid_sentences_en)
+        s_init=decoder.initial_state().set_s(final_state_reverse)
+        o_init=s_init.output() 
+        alpha_init=dy.softmax(dy.concatenate([dy.dot_product(o_init,final_combined_output) for final_combined_output in final_combined_outputs]))
+        c_init=attend_vector(final_combined_outputs,alpha_init)
 
+        
+        s_0=s_init
+        o_0=o_init
+        alpha_0=alpha_init
+        c_0=c_init
+        
 
+        losses=[]
+        
+        for en in sentence_en:
+            #Calculate loss and append to the losses array
+            scores=None
+            if downstream:
+                scores=R*dy.concatenate([o_0,c_0])+bias
+            else:
+                scores=R*o_0+bias
+            loss=dy.pickneglogsoftmax(scores,en)
+            losses.append(loss)
 
-#Specify model
-model=dy.Model()
+            #Take in input
+            i_t=dy.concatenate([dy.lookup(decoder_lookup,en),c_0])
+            s_t=s_0.add_input(i_t)
+            o_t=s_t.output()
+            alpha_t=dy.softmax(dy.concatenate([dy.dot_product(o_t,final_combined_output) for final_combined_output in final_combined_outputs]))
+            c_t=attend_vector(final_combined_outputs,alpha_t)
+            
+            #Prepare for the next iteration
+            s_0=s_t
+            o_0=o_t
+            c_0=c_t
+            alpha_0=alpha_t
 
-if config.GRU:
-    encoder=dy.GRUBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
-    revcoder=dy.GRUBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
-    decoder=dy.GRUBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE+hyperParams.HIDDEN_SIZE,hyperParams.HIDDEN_SIZE,model)
-else:
-    encoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
-    revcoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
-    decoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE+hyperParams.HIDDEN_SIZE,hyperParams.HIDDEN_SIZE,model)
-
-encoder_params={}
-encoder_params["lookup"]=model.add_lookup_parameters((VOCAB_SIZE_DE,hyperParams.EMB_SIZE))
-
-decoder_params={}
-if config.sharing:
-    decoder_params["lookup"]=encoder_params["lookup"]
-else:
-    decoder_params["lookup"]=model.add_lookup_parameters((VOCAB_SIZE_EN,hyperParams.EMB_SIZE))
-
-if config.downstream:
-    decoder_params["R"]=model.add_parameters((VOCAB_SIZE_EN,2*hyperParams.HIDDEN_SIZE))
-else:
-    decoder_params["R"]=model.add_parameters((VOCAB_SIZE_EN,hyperParams.HIDDEN_SIZE))
-
-decoder_params["bias"]=model.add_parameters((VOCAB_SIZE_EN))
-
-trainer=dy.SimpleSGDTrainer(model)
-
-totalSentences=0
-for epochId in xrange(hyperParams.NUM_EPOCHS):    
-    random.shuffle(train_sentences)
-    for sentenceId,sentence in enumerate(train_sentences):
-        totalSentences+=1
-        sentence_de=sentence[0]
-        sentence_en=sentence[1]
-        loss,words=do_one_example(model,encoder,revcoder,decoder,encoder_params,decoder_params,sentence_de,sentence_en,downstream=config.downstream,GRU=config.GRU)
-        loss.value()
-        loss.backward()
-        trainer.update()
-        if totalSentences%100==0:
-            #random.shuffle(valid_sentences)
-            perplexity=0.0
-            totalLoss=0.0
-            totalWords=0.0
-            for valid_sentence in valid_sentences:
-                valid_sentence_de=valid_sentence[0]
-                valid_sentence_en=valid_sentence[1]
-                validLoss,words=do_one_example(model,encoder,revcoder,decoder,encoder_params,decoder_params,valid_sentence_de,valid_sentence_en,downstream=config.downstream,GRU=config.GRU)
-                totalLoss+=float(validLoss.value())
-                totalWords+=words
-            print totalLoss
-            print totalWords
-            perplexity=math.exp(totalLoss/totalWords)
-            print "Validation perplexity after epoch:",epochId,"sentenceId:",sentenceId,"Perplexity:",perplexity,"Time:",datetime.datetime.now()             
-    trainer.update_epoch(1.0)
+        total_loss=dy.esum(losses)
+        return total_loss,total_words
 
 
-originalWordFile=open("originalWords.txt","w")
-outputWordFile=open("outputWords.txt","w")
-import editdistance
 
-exactMatches=0
-editDistance=0.0
+    def __init__(self,config,hyperParams):
+        self.config=config
+        self.hyperParams=hyperParams
 
-
-for validSentenceId,validSentence in enumerate(valid_sentences):
-    valid_sentence_de=validSentence[0]
-    valid_sentence_en=validSentence[1]
-    validLoss,valid_sentence_en_hat=greedyDecode(model,encoder,revcoder,decoder,encoder_params,decoder_params,valid_sentence_de,downstream=config.downstream,GRU=config.GRU,hyperParams=hyperParams)
-
-    originalWord="".join([reverse_wids[c] for c in valid_sentence_en[:-1]])
-    outputWord="".join([reverse_wids[c] for c in valid_sentence_en_hat[:-1]])
+        if self.config.READ_OPTION=="NORMAL":
+            train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(trainingPoints=700,validPoints=400)
+        elif self.config.READ_OPTION=="NORMALDISJOINT":
+            train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getDataDisjoint(trainingPoints=500,validPoints=200)
+        elif self.config.READ_OPTION=="KNIGHTHOLDOUT":
+            train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getDataKnightHoldOut(trainingPoints=1000)
     
-    if originalWord==outputWord:
-        exactMatches+=1
+        self.train_sentences_de=train_sentences_de
+        self.train_sentences_en=train_sentences_en
+        self.valid_sentences_de=valid_sentences_de
+        self.valid_sentences_en=valid_sentences_en
+        self.test_sentences_de=test_sentences_de
+        self.test_sentences_en=test_sentences_en
+        self.wids=wids
+        self.reverse_wids=readData.reverseDictionary(self.wids)
 
-    editDistance+=editdistance.eval(originalWord,outputWord)
+        print len(self.train_sentences_de)
+        print len(self.train_sentences_en)
 
-    print "Input Word Pair:,","".join([reverse_wids[c] for c in valid_sentence_de])
-    print "Original Word:,",originalWord    
-    print "Output Word:,",outputWord
+        print len(self.valid_sentences_de)
+        print len(self.valid_sentences_en)
 
-    originalWordFile.write(originalWord+"\n")
-    outputWordFile.write(outputWord+"\n")
+        self.VOCAB_SIZE_DE=len(wids)
+        self.VOCAB_SIZE_EN=self.VOCAB_SIZE_DE
 
-totalWords=len(valid_sentences)
-
-print "Total Words",totalWords
-print "Exact Matches",exactMatches
-print "Average Edit Distance",(editDistance+0.0)/(totalWords+0.0)
+        self.train_sentences=zip(self.train_sentences_de,self.train_sentences_en)
+        self.valid_sentences=zip(self.valid_sentences_de,self.valid_sentences_en)
+        self.test_sentences=zip(self.test_sentences_de,self.test_sentences_en)
 
 
-originalWordFile.close()
-outputWordFile.close()
+        #Specify model
+        self.model=dy.Model()
 
-#train_batch(model,encoder,revcoder,decoder,encoder_params,decoder_params,train_sentences,valid_sentences,NUM_EPOCHS,"Models/"+"Attentional"+"_"+str(HIDDEN_SIZE)+"_"+"Uni")
+        config=self.config
+        hyperParams=self.hyperParams
+        model=self.model
+
+        if self.config.GRU:
+            self.encoder=dy.GRUBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
+            self.revcoder=dy.GRUBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
+            self.decoder=dy.GRUBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE+hyperParams.HIDDEN_SIZE,hyperParams.HIDDEN_SIZE,model)
+        else:
+            self.encoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
+            self.revcoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
+            self.decoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE+hyperParams.HIDDEN_SIZE,hyperParams.HIDDEN_SIZE,model)
+
+        self.encoder_params={}
+        self.encoder_params["lookup"]=model.add_lookup_parameters((self.VOCAB_SIZE_DE,hyperParams.EMB_SIZE))
+
+        self.decoder_params={}
+        if config.sharing:
+            self.decoder_params["lookup"]=self.encoder_params["lookup"]
+        else:
+            self.decoder_params["lookup"]=model.add_lookup_parameters((self.VOCAB_SIZE_EN,hyperParams.EMB_SIZE))
+
+        if config.downstream:
+            self.decoder_params["R"]=model.add_parameters((self.VOCAB_SIZE_EN,2*hyperParams.HIDDEN_SIZE))
+        else:
+            self.decoder_params["R"]=model.add_parameters((self.VOCAB_SIZE_EN,hyperParams.HIDDEN_SIZE))
+
+        self.decoder_params["bias"]=model.add_parameters((self.VOCAB_SIZE_EN))
+
+    def train(self):
+        trainer=dy.SimpleSGDTrainer(self.model)
+        totalSentences=0
+        for epochId in xrange(hyperParams.NUM_EPOCHS):    
+            random.shuffle(self.train_sentences)
+            for sentenceId,sentence in enumerate(self.train_sentences):
+                totalSentences+=1
+                sentence_de=sentence[0]
+                sentence_en=sentence[1]
+                loss,words=self.do_one_example(sentence_de,sentence_en)
+                loss.value()
+                loss.backward()
+                trainer.update()
+                if totalSentences%100==0:
+                    #random.shuffle(valid_sentences)
+                    perplexity=0.0
+                    totalLoss=0.0
+                    totalWords=0.0
+                    for valid_sentence in self.valid_sentences:
+                        valid_sentence_de=valid_sentence[0]
+                        valid_sentence_en=valid_sentence[1]
+                        validLoss,words=self.do_one_example(valid_sentence_de,valid_sentence_en)
+                        totalLoss+=float(validLoss.value())
+                        totalWords+=words
+                    print totalLoss
+                    print totalWords
+                    perplexity=math.exp(totalLoss/totalWords)
+                    print "Validation perplexity after epoch:",epochId,"sentenceId:",sentenceId,"Perplexity:",perplexity,"Time:",datetime.datetime.now()             
+            trainer.update_epoch(1.0)
+
+
+    def testOut(self,valid_sentences,verbose=True,originalFileName="originalWords.txt",outputFileName="outputWords.txt"):
+        reverse_wids=self.reverse_wids
+
+        originalWordFile=open(originalFileName,"w")
+        outputWordFile=open(outputFileName,"w")
+        import editdistance
+        exactMatches=0
+        editDistance=0.0
+        
+
+        for validSentenceId,validSentence in enumerate(valid_sentences):
+            valid_sentence_de=validSentence[0]
+            valid_sentence_en=validSentence[1]
+            validLoss,valid_sentence_en_hat=self.greedyDecode(valid_sentence_de)
+
+            originalWord="".join([reverse_wids[c] for c in valid_sentence_en[:-1]])
+            outputWord="".join([reverse_wids[c] for c in valid_sentence_en_hat[:-1]])
+    
+            if originalWord==outputWord:
+                exactMatches+=1
+
+            editDistance+=editdistance.eval(originalWord,outputWord)
+            
+            if verbose:
+                print "Input Word Pair:,","".join([reverse_wids[c] for c in valid_sentence_de])
+                print "Original Word:,",originalWord    
+                print "Output Word:,",outputWord
+
+        originalWordFile.write(originalWord+"\n")
+        outputWordFile.write(outputWord+"\n")
+
+        totalWords=len(valid_sentences)
+        
+        
+        print "Total Words",totalWords
+        print "Exact Matches",exactMatches
+        print "Average Edit Distance",(editDistance+0.0)/(totalWords+0.0)
+
+
+        originalWordFile.close()
+        outputWordFile.close()
+
+if __name__=="__main__":
+    READ_OPTION="NORMALDISJOINT"
+    downstream=True
+    sharing=False
+    GRU=False
+
+    config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU)
+    hyperParams=HyperParams()
+
+    predictor=Model(config,hyperParams)
+    predictor.train()
+
+    predictor.testOut(predictor.valid_sentences,verbose=True,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+    predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+
