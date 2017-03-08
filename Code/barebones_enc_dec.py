@@ -125,11 +125,12 @@ class Config:
     sharing=False
     GRU=False
 
-    def __init__(self,READ_OPTION="NORMAL",downstream=True,sharing=False,GRU=False):
+    def __init__(self,READ_OPTION="NORMAL",downstream=True,sharing=False,GRU=False,preTrain=False):
         self.READ_OPTION=READ_OPTION
         self.downstream=downstream
         self.sharing=sharing
         self.GRU=GRU
+        self.preTrain=preTrain
 
 class HyperParams:
     EMB_SIZE=None
@@ -233,6 +234,56 @@ class Model:
         return total_loss,englishSequence
 
 
+    def do_one_example_pretrain(self,sentence_de):
+        model=self.model
+        encoder=self.encoder
+        revcoder=self.revcoder
+        encoder_params=self.encoder_params
+        downstream=self.config.downstream
+        GRU=self.config.GRU
+
+        dy.renew_cg()
+        encoder_lookup=encoder_params["lookup"]
+        R_DE=dy.parameter(encoder_params["R_DE"])
+        bias_DE=dy.parameter(encoder_params["bias_DE"])
+
+        sentence_de_forward=sentence_de
+        sentence_de_reverse=sentence_de[::-1]
+
+        s=encoder.initial_state()
+        s=s.add_input(dy.lookup(encoder_lookup,self.hyperParams.SEPARATOR))
+        
+        inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_forward]
+        states=[s,]+s.add_inputs(inputs)
+        states=states[:-1]
+        forward_scores=[]
+        for s in states:
+            o_0=s.output()
+            forward_score=(R_DE)*(o_0)+(bias_DE)
+            forward_scores.append(forward_score)
+
+        forward_losses=[dy.pickneglogsoftmax(forward_scores[i],de) for i,de in enumerate(sentence_de_forward)]
+
+
+        s_reverse=revcoder.initial_state()
+        s_reverse=s_reverse.add_input(dy.lookup(encoder_lookup,self.hyperParams.SEPARATOR))
+        inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_reverse]
+        states_reverse=[s_reverse,]+s_reverse.add_inputs(inputs)
+        states=states_reverse[:-1]
+        backward_scores=[]
+        for s in states_reverse:
+            o_0=s.output()
+            backward_score=(R_DE)*o_0+(bias_DE)
+            backward_scores.append(backward_score)
+
+        backward_losses=[dy.pickneglogsoftmax(backward_scores[i],de) for i,de in enumerate(sentence_de_reverse)]
+
+        forward_loss=dy.esum(forward_losses)
+        backward_loss=dy.esum(backward_losses)
+        losses=[forward_loss,]+[backward_loss,]
+        random.shuffle(losses)
+        
+        return losses
 
     def do_one_example(self,sentence_de,sentence_en):
         model=self.model
@@ -382,7 +433,33 @@ class Model:
 
         self.decoder_params["bias"]=model.add_parameters((self.VOCAB_SIZE_EN))
 
+        if config.preTrain:
+            self.encoder_params["R_DE"]=model.add_parameters((self.VOCAB_SIZE_DE,hyperParams.HIDDEN_SIZE))
+            self.encoder_params["bias_DE"]=model.add_parameters((self.VOCAB_SIZE_DE))
+
+
+
+    def pretrain(self):
+        trainer=dy.SimpleSGDTrainer(self.model)
+        totalSentences=0
+        for epochId in xrange(hyperParams.NUM_EPOCHS):    
+            random.shuffle(self.train_sentences)
+            for sentenceId,sentence in enumerate(self.train_sentences):
+                totalSentences+=1
+                sentence_de=sentence[0]
+                losses=self.do_one_example_pretrain(sentence_de)
+                for loss in losses:
+                    loss.value()
+                    loss.backward()
+                    trainer.update()
+            trainer.update_epoch(1.0)
+
+
     def train(self):
+        if self.config.preTrain:
+            print "Pretraining"
+            self.pretrain()
+
         trainer=dy.SimpleSGDTrainer(self.model)
         totalSentences=0
         for epochId in xrange(hyperParams.NUM_EPOCHS):    
@@ -456,12 +533,13 @@ class Model:
         outputWordFile.close()
 
 if __name__=="__main__":
-    READ_OPTION="NORMALDISJOINT"
+    READ_OPTION="NORMAL"
+    preTrain=True
     downstream=True
     sharing=False
     GRU=False
 
-    config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU)
+    config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU,preTrain=preTrain)
     hyperParams=HyperParams()
 
     predictor=Model(config,hyperParams)
