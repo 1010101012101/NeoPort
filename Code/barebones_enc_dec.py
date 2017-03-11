@@ -126,7 +126,7 @@ class Config:
     sharing=False
     GRU=False
 
-    def __init__(self,READ_OPTION="NORMAL",downstream=True,sharing=False,GRU=False,preTrain=False,initFromFile=False,initFileName=None):
+    def __init__(self,READ_OPTION="NORMAL",downstream=True,sharing=False,GRU=False,preTrain=False,initFromFile=False,initFileName=None,foldId=None):
         self.READ_OPTION=READ_OPTION
         self.downstream=downstream
         self.sharing=sharing
@@ -134,6 +134,7 @@ class Config:
         self.preTrain=preTrain
         self.initFromFile=initFromFile
         self.initFileName=initFileName
+        self.foldId=foldId
 
 class HyperParams:
     EMB_SIZE=None
@@ -504,21 +505,32 @@ class Model:
         self.modelFile=modelFile
         self.bestPerplexity=float("inf")
 
-        if self.config.READ_OPTION=="NORMAL":
+        if self.config.READ_OPTION=="KNIGHTCROSSVALIDATE":
+            train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(filterKnight=True,crossValidate=True,foldId=config.foldId)
+        elif self.config.READ_OPTION=="NORMAL":
             train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(trainingPoints=700,validPoints=400)
+        elif self.config.READ_OPTION=="KNIGHTONLY":
+            train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(trainingPoints=320,validPoints=40,filterKnight=True) 
         elif self.config.READ_OPTION=="NORMALDISJOINT":
             train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getDataDisjoint(trainingPoints=500,validPoints=200)
         elif self.config.READ_OPTION=="KNIGHTHOLDOUT":
             train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getDataKnightHoldOut(trainingPoints=1000)
-    
+        elif self.config.READ_OPTION=="PHONETICINPUT":
+            train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids,wids_phonetic=readData.getDataPhoneticInput(trainingPoints=700,validPoints=400)       
+
         self.train_sentences_de=train_sentences_de
         self.train_sentences_en=train_sentences_en
         self.valid_sentences_de=valid_sentences_de
         self.valid_sentences_en=valid_sentences_en
         self.test_sentences_de=test_sentences_de
         self.test_sentences_en=test_sentences_en
+        
+        
         self.wids=wids
         self.reverse_wids=readData.reverseDictionary(self.wids)
+        if self.config.READ_OPTION=="PHONETICINPUT" or self.config.READ_OPTION=="PHONOLEXINPUT":
+            self.wids_phonetic=wids_phonetic
+            self.reverse_wids_phonetic=readData.reverseDictionary(self.wids_phonetic)
 
         print len(self.train_sentences_de)
         print len(self.train_sentences_en)
@@ -526,8 +538,12 @@ class Model:
         print len(self.valid_sentences_de)
         print len(self.valid_sentences_en)
 
-        self.VOCAB_SIZE_DE=len(wids)
-        self.VOCAB_SIZE_EN=self.VOCAB_SIZE_DE
+        if self.config.READ_OPTION=="PHONETICINPUT":
+            self.VOCAB_SIZE_DE=len(self.wids_phonetic)
+            self.VOCAB_SIZE_EN=len(self.wids)
+        else:
+            self.VOCAB_SIZE_DE=len(wids)
+            self.VOCAB_SIZE_EN=self.VOCAB_SIZE_DE
 
         self.train_sentences=zip(self.train_sentences_de,self.train_sentences_en)
         self.valid_sentences=zip(self.valid_sentences_de,self.valid_sentences_en)
@@ -551,6 +567,9 @@ class Model:
             self.decoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE+hyperParams.HIDDEN_SIZE,hyperParams.HIDDEN_SIZE,model)
 
         if self.config.initFromFile:
+            if self.config.READ_OPTION=="PHONETICINPUT":
+                print "Cannot initialize phonetic embeddings from character embeddings"
+                exit()
             preEmbeddings=loadEmbeddingsFile.loadEmbeddings(wids,self.config.initFileName,hyperParams.EMB_SIZE)
             
     
@@ -659,6 +678,9 @@ class Model:
     def testOut(self,valid_sentences,verbose=True,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="greedy",beam_decode_k=1):
         reverse_wids=self.reverse_wids
 
+        if self.config.READ_OPTION=="PHONETICINPUT" or self.config.READ_OPTION=="PHONOLEXINPUT":
+            reverse_wids_phonetic=self.reverse_wids_phonetic
+
         originalWordFile=open(originalFileName,"w")
         outputWordFile=open(outputFileName,"w")
         import editdistance
@@ -686,7 +708,11 @@ class Model:
             editDistance+=editdistance.eval(originalWord,outputWord)
             
             if verbose:
-                print "Input Word Pair:,","".join([reverse_wids[c] for c in valid_sentence_de])
+                if self.config.READ_OPTION=="PHONETICINPUT" or self.config.READ_OPTION=="PHONOLEXINPUT":
+                    print "Input Word Pair:,","".join([reverse_wids_phonetic[c] for c in valid_sentence_de])
+                else:
+                    print "Input Word Pair:,","".join([reverse_wids[c] for c in valid_sentence_de])
+
                 print "Original Word:,",originalWord    
                 print "Output Word:,",outputWord
 
@@ -696,6 +722,7 @@ class Model:
         totalWords=len(valid_sentences)
         
         
+        
         print "Total Words",totalWords
         print "Exact Matches",exactMatches
         print "Average Edit Distance",(editDistance+0.0)/(totalWords+0.0)
@@ -703,45 +730,93 @@ class Model:
 
         originalWordFile.close()
         outputWordFile.close()
+        
+        return exactMatches,(editDistance+0.0)/(totalWords+0.0)
+        
 
 if __name__=="__main__":
-    READ_OPTION="NORMAL"
-    preTrain=False
-    downstream=True
-    sharing=False
-    GRU=False
-    initFromFile=True
-    initFileName="../Pretrained/output_embeddings_134iter_lowestValLoss.txt"
 
-    config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU,preTrain=preTrain,initFromFile=initFromFile,initFileName=initFileName)
-    hyperParams=HyperParams(NUM_EPOCHS=10)
+    if sys.argv[1]=="PLAIN":
+        random.seed(491)
 
-    predictor=Model(config,hyperParams)
-    predictor.train()
+        READ_OPTION="KNIGHTONLY"
+        preTrain=False
+        downstream=True
+        sharing=False
+        GRU=False
+        initFromFile=True
+        initFileName="../Pretrained/output_embeddings_134iter_lowestValLoss.txt"
 
-    print "Greedy Decode"
-    print "Validation Performance"
-    predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
-    print "Test Performance"
-    predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+        config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU,preTrain=preTrain,initFromFile=initFromFile,initFileName=initFileName)
+        hyperParams=HyperParams(NUM_EPOCHS=10)
 
-    """
-    print "Beam Decode"
-    predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="beam",beam_decode_k=5)
-    #predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="beam",beam_decode_k=2)
-    """
+        predictor=Model(config,hyperParams)
+        predictor.train(interEpochPrinting=False)
 
-    predictor.load_model()
+        print "Greedy Decode"
+        print "Validation Performance"
+        predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+        print "Test Performance"
+        predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
 
-    print "Greedy Decode"
-    print "Validation Performance"
-    predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
-    print "Test Performance"
-    predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+        
+        #print "Beam Decode"
+        #predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="beam",beam_decode_k=5)
+        """
+        #predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="beam",beam_decode_k=2)
+        """
 
-    """
-    print "Beam Decode"
-    predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="beam",beam_decode_k=5)
-    #predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="beam",beam_decode_k=2)
-    """
+        predictor.load_model()
+
+        print "Greedy Decode"
+        print "Validation Performance"
+        predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+        #print "Test Performance"
+        predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+
+        """
+        print "Beam Decode"
+        predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="beam",beam_decode_k=5)
+        #predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="beam",beam_decode_k=2)
+        """
+
+    elif sys.argv[1]=="CROSSVALTRAIN":
+        random.seed(491)
+
+        READ_OPTION="KNIGHTCROSSVALIDATE"
+        preTrain=False
+        downstream=True
+        sharing=False
+        GRU=False
+        initFromFile=True
+        initFileName="../Pretrained/output_embeddings_134iter_lowestValLoss.txt"
+
+        averageValidMatches=0.0
+        averageTestMatches=0.0
+        averageValidDistance=0.0
+        averageTestDistance=0.0
+        for foldId in range(10):
+            config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU,preTrain=preTrain,initFromFile=initFromFile,initFileName=initFileName,foldId=foldId)
+            hyperParams=HyperParams(NUM_EPOCHS=10)
+
+            predictor=Model(config,hyperParams)
+            predictor.train(interEpochPrinting=False)
+
+            print "Greedy Decode"
+            print "Validation Performance"
+            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+            print "Test Performance"
+            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+            
+            averageValidMatches+=validMatches
+            averageValidDistance+=validDistance
+            averageTestMatches+=testMatches
+            averageTestDistance+=testDistance
+
+
+        print "Average Valid Matches",averageValidMatches/10
+        print "Average Test Matches",averageTestMatches/10
+        print "Average Valid Distance",averageValidDistance/10
+        print "Average Test Distance",averageTestDistance/10
+
 
