@@ -1,0 +1,2 @@
+1) Use data from cmu dictionary to train a RNN under cross entropy loss. Dump character embeddings.
+2) Load pre-trained model based on checkpii t
