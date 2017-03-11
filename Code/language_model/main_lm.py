@@ -8,8 +8,8 @@ import configuration as config
 from sklearn.preprocessing import LabelEncoder
 import models
 import pickle
-import utilities as datasets
-import utilities
+import utilities_lm as datasets
+import utilities_lm
 from keras.callbacks import ModelCheckpoint
 import sys
 
@@ -129,61 +129,95 @@ def saveEmbeddings(model, vocab, embeddings_out_name = "output_embeddings.txt"):
 	print "Saved embeddings to ",embeddings_out_name
 
 
+class RNNLanguageModelHandler:
+	def __init__(self,args):
+		option, checkpoint_fname, action = args
+		rnn_model = models.RNNModel()
+		preprocessing = PreProcessing()
+
+		if config.char_or_word == config.character_model:
+			data=None
+			if config.data_type=="cmu_dict":
+				cmu_data = datasets.getCMUDictData(config.data_src_cmu)
+				data=cmu_data
+				preprocessing.loadDataCharacter(data=data)
+			else:
+				preprocessing.loadData()		
+				preprocessing.prepareLMdata()
+		self.preprocessing=preprocessing
+		# get model
+		params = {}
+		params['embeddings_dim'] =  config.embeddings_dim
+		params['lstm_cell_size'] = config.lstm_cell_size
+		if config.char_or_word == config.character_model:
+			params['vocab_size'] =  preprocessing.vocab_size
+		else:
+			params['vocab_size'] =  len( preprocessing.word_index )
+		params['inp_length'] = config.inp_length-1
+		model = rnn_model.getModel(params)
+		
+		if option=="train":
+			x_train, y_train, x_val, y_val, x_test, y_test = preprocessing.x_train, preprocessing.y_train, preprocessing.x_val, preprocessing.y_val, preprocessing.x_test, preprocessing.y_test
+			# train
+			checkpointer = ModelCheckpoint(filepath="./checkpoints/weights.{epoch:02d}-{val_loss:.2f}.hdf5", verbose=1, save_best_only=True)
+			model.fit(x_train, y_train, validation_data=(x_val, y_val),
+				nb_epoch=config.num_epochs, batch_size=config.batch_size, callbacks=[checkpointer]) #config.num_epochs
+	   		#evaluate
+			scores = model.evaluate(x_test, y_test, verbose=0)
+			print("Accuracy: %.2f%%" % (scores[1]*100))
+			#Sample sequences
+			print "--- Sampling few sequences.. "
+			for i in range(5):
+				pred = utilities.generateSentence(model, preprocessing.word_index, preprocessing.sent_start, 
+					preprocessing.sent_end, preprocessing.unknown_word)
+				sent = [preprocessing.index_word[i] for i in pred]
+				if config.char_or_word==config.character_model:
+					print ''.join(sent)
+				else:
+					print ' '.join(sent)
+		else:
+			model.load_weights(checkpoint_fname)
+		self.model = model
+		#Action
+		if action=="save_embeddings":
+			saveEmbeddings(model, preprocessing.word_index)
+		else:
+			pass
+			  
+	def getSequenceScore(self, test_sequence):
+		model=self.model
+		word_to_index=self.preprocessing.word_index
+		start_token = self.preprocessing.sent_start
+		end_token = self.preprocessing.sent_end
+		unknown_token = self.preprocessing.unknown_word
+		test_sequence = list(test_sequence)
+		test_sequence.append(end_token)
+		x = [ word_to_index[start_token] ]
+		i=0
+		log_prob_sum=None
+		while i<len(test_sequence):
+			x_temp = pad_sequences([x], maxlen=config.MAX_SEQUENCE_LENGTH, padding='post', truncating='post')
+			data = np.array( [ sequence[:-1] for sequence in x_temp] ) # only 1 sequence is actually there
+			y = model.predict( data )[0][i]
+			next_word = test_sequence[i]
+			idx_of_next_word = word_to_index[next_word]
+			prob_next_word = y[idx_of_next_word]
+			if i==0:
+				log_prob_sum = np.log(prob_next_word)
+			else:
+				log_prob_sum += np.log(prob_next_word)
+			x.append(idx_of_next_word)
+			i += 1
+		return log_prob_sum
+
 def main():
-        option = sys.argv[1] # train or load
-        if option == "train":
-            pass
-        else:
-            checkpoint_fname = sys.argv[2]
-
-	rnn_model = models.RNNModel()
-        preprocessing = PreProcessing()
-
-	if config.char_or_word == config.character_model:
-	    data=None
-    	    if config.data_type=="cmu_dict":
-		cmu_data = datasets.getCMUDictData(config.data_src_cmu)
-                data=cmu_data
-	    preprocessing.loadDataCharacter(data=data)
-    	else:
-	    preprocessing.loadData()		
-        preprocessing.prepareLMdata()
-	
-	# get model
-	params = {}
-	params['embeddings_dim'] =  config.embeddings_dim
-	params['lstm_cell_size'] = config.lstm_cell_size
-	if config.char_or_word == config.character_model:
-		params['vocab_size'] =  preprocessing.vocab_size
+	option = sys.argv[1] # train or load
+	if option == "train":
+		checkpoint_fname=None
 	else:
-		params['vocab_size'] =  len( preprocessing.word_index )
-	params['inp_length'] = config.inp_length-1
-	model = rnn_model.getModel(params)
-	
-        if option=="train":
-            x_train, y_train, x_val, y_val, x_test, y_test = preprocessing.x_train, preprocessing.y_train, preprocessing.x_val, preprocessing.y_val, preprocessing.x_test, preprocessing.y_test
-            # train
-            checkpointer = ModelCheckpoint(filepath="./checkpoints/weights.{epoch:02d}-{val_loss:.2f}.hdf5", verbose=1, save_best_only=True)
-            model.fit(x_train, y_train, validation_data=(x_val, y_val),
-                nb_epoch=config.num_epochs, batch_size=config.batch_size, callbacks=[checkpointer]) #config.num_epochs
-
-	    #evaluate
-    	    scores = model.evaluate(x_test, y_test, verbose=0)
-    	    print("Accuracy: %.2f%%" % (scores[1]*100))
-
-    	    print "--- Sampling few sequences.. "
-	    for i in range(5):
-	        pred = utilities.generateSentence(model, preprocessing.word_index, preprocessing.sent_start, 
-	    	    preprocessing.sent_end, preprocessing.unknown_word)
-	        sent = [preprocessing.index_word[i] for i in pred]
-	        if config.char_or_word==config.character_model:
-	    	    print ''.join(sent)
-	        else:
-	    	    print ' '.join(sent)
-        else:
-            model.load_weights(checkpoint_fname)
-        saveEmbeddings(model, preprocessing.word_index)
-              
+		checkpoint_fname = sys.argv[2]
+	action="save_embeddings"
+	RNNLanguageModelHandler((option, checkpoint_fname, action))
 
 if __name__ == "__main__":
 	main()

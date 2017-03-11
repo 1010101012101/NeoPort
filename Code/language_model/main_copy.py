@@ -8,8 +8,8 @@ import configuration as config
 from sklearn.preprocessing import LabelEncoder
 import models
 import pickle
-import utilities as datasets
-import utilities
+import utilities_lm as datasets
+import utilities_lm
 from keras.callbacks import ModelCheckpoint
 
 
