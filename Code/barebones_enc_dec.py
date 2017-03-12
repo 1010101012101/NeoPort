@@ -513,7 +513,7 @@ class Model:
         
         return losses
 
-    def genDecode(self,sentence_de):
+    def genDecode(self,sentence_de,useBaseline=False):
         part1=sentence_de[:sentence_de.index(self.hyperParams.SEPARATOR)]
         part2=sentence_de[sentence_de.index(self.hyperParams.SEPARATOR)+1:-1]
         part1=[self.reverse_wids[c] for c in part1]
@@ -524,23 +524,41 @@ class Model:
         parentSet.add(part1)
         parentSet.add(part2)
         candidates=list(utilities.generateCandidates(part1,part2)-parentSet)
-        candidates=[[self.wids[c] for c in candidate]+[self.hyperParams.STOP,] for candidate in candidates]
-        prunedCandidates=[]
-        for candidate in candidates:
-            if len(candidate)>4:
-                prunedCandidates.append(candidate)
-        candidates=prunedCandidates
-        losses=[]
-        for candidate in candidates:
-            loss,words=self.do_one_example(sentence_de,candidate)
-            loss=np.sum(loss.npvalue())
-            losses.append(loss)
-        candidateLosses=zip(candidates,losses)
-        candidateLosses.sort(key= lambda x:x[1])
+        if useBaseline==False:
+            candidates=[[self.wids[c] for c in candidate]+[self.hyperParams.STOP,] for candidate in candidates]
+            prunedCandidates=[]
+            for candidate in candidates:
+                if len(candidate)>4:
+                    prunedCandidates.append(candidate)
+            candidates=prunedCandidates
+            losses=[]
+            for candidate in candidates:
+                loss,words=self.do_one_example(sentence_de,candidate)
+                loss=np.sum(loss.npvalue())
+                losses.append(loss)
+            candidateLosses=zip(candidates,losses)
+            candidateLosses.sort(key= lambda x:x[1])
 
-        print [self.reverse_wids[c] for c in candidateLosses[0][0]]
-        #exit()
-        return candidateLosses[0][1],candidateLosses[0][0] 
+            print [self.reverse_wids[c] for c in candidateLosses[0][0]]
+            #exit()
+            return candidateLosses[0][1],candidateLosses[0][0] 
+        else:
+            prunedCandidates=[]
+            for candidate in candidates:
+                if len(candidate)>4:
+                    prunedCandidates.append(candidate)
+            candidates=prunedCandidates
+            losses=[]
+            for candidate in candidates:
+                loss=self.lm_model.getSequenceScore(candidate)
+                losses.append(loss)
+            candidateLosses=zip(candidates,losses)
+            candidateLosses.sort(key=lambda x:x[1])
+
+            print candidateLosses[0][0]
+            bestCandidate=[self.wids[c] for c in candidateLosses[0][0]]+[self.hyperParams.STOP,]
+            bestCandidateLoss=candidateLosses[0][1]
+            return bestCandidateLoss,bestCandidate
 
     def do_one_example(self,sentence_de,sentence_en):
         model=self.model
@@ -739,7 +757,8 @@ class Model:
             self.encoder_params["R_DE"]=model.add_parameters((self.VOCAB_SIZE_DE,hyperParams.HIDDEN_SIZE))
             self.encoder_params["bias_DE"]=model.add_parameters((self.VOCAB_SIZE_DE))
 
-
+        import example
+        self.lm_model=example.lm_model
 
     def pretrain(self):
         trainer=dy.SimpleSGDTrainer(self.model)
@@ -837,6 +856,9 @@ class Model:
                 validLoss,valid_sentence_en_hat=self.beamDecode(valid_sentence_de,k=beam_decode_k)
             elif decodeMethod=="gen":
                 validLoss,valid_sentence_en_hat=self.genDecode(valid_sentence_de)
+            elif decodeMethod=="genBase":
+                validLoss,valid_sentence_en_hat=self.genDecode(valid_sentence_de,useBaseline=True)
+ 
             #valid_sentence_en_stripped=self.stripStops(valid_sentence_en)
             #valid_sentence_en_hat_stripped=self.stripStops(valid_sentence_en_hat)
 
@@ -932,6 +954,7 @@ if __name__=="__main__":
         initFromFile=True
         initFileName="../Pretrained/output_embeddings_134iter_lowestValLoss.txt"
         dMethod="REVERSE"
+        decodeMethod="genBase"
 
         averageValidMatches=0.0
         averageTestMatches=0.0
@@ -954,9 +977,9 @@ if __name__=="__main__":
 
             print "Greedy Decode"
             print "Validation Performance"
-            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="gen")
+            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
             print "Test Performance"
-            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="gen")
+            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
 
 
             averageValidMatches+=validMatches
@@ -967,9 +990,9 @@ if __name__=="__main__":
             predictor.load_model()
 
             print "Validation Performance Best"
-            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="gen")
+            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
             print "Test Performance Best"
-            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="gen")
+            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
 
             averageValidMatchesBest+=validMatches
             averageValidDistanceBest+=validDistance
