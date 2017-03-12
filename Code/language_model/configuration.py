@@ -3,7 +3,7 @@ data_src_cmu = "./data/cmudict-0.7b"
 data_src = "./data/imdb.txt"
 
 max_sequence_length_imdb = 80
-max_sequence_length_cmu_dict = 25
+max_sequence_length_cmu_dict = 60
 MAX_SEQUENCE_LENGTH=None
 if data_type=="cmu_dict":
 	MAX_SEQUENCE_LENGTH = max_sequence_length_cmu_dict
