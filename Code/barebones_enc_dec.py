@@ -10,6 +10,7 @@ import datetime
 import nltk
 import copy
 import loadEmbeddingsFile
+import utilities
 
 def attend(encoder_outputs,state_factor_matrix):
     miniBatchLength=state_factor_matrix.npvalue().shape[1]
@@ -144,7 +145,7 @@ class HyperParams:
     STOP=None
     SEPARATOR=None
 
-    def __init__(self,EMB_SIZE=50,LAYER_DEPTH=1,HIDDEN_SIZE=100,NUM_EPOCHS=10,STOP=0,SEPARATOR=1):
+    def __init__(self,EMB_SIZE=50,LAYER_DEPTH=1,HIDDEN_SIZE=100,NUM_EPOCHS=10,STOP=0,SEPARATOR=1,dMethod="REVERSE"):
         #Hyperparameter Definition
         self.EMB_SIZE=EMB_SIZE
         self.LAYER_DEPTH=LAYER_DEPTH
@@ -152,6 +153,7 @@ class HyperParams:
         self.NUM_EPOCHS=NUM_EPOCHS
         self.STOP=STOP
         self.SEPARATOR=SEPARATOR
+        self.dMethod=dMethod
 
 def equalSequence(x,y):
     if len(x)!=len(y):
@@ -210,7 +212,13 @@ class Model:
             final_coding_state=((final_state_reverse[0]+final_state[0]),(final_state_reverse[1]+final_state[1]))
         final_combined_outputs=[revcoder_output+encoder_output for revcoder_output,encoder_output in zip(revcoder_outputs[::-1],encoder_outputs)]
 
-        s_init=decoder.initial_state().set_s(final_state_reverse)
+        initDict={}
+        initDict["FORWARD"]=final_state
+        initDict["REVERSE"]=final_state_reverse
+        initDict["BI"]=final_coding_state
+
+        s_init=decoder.initial_state().set_s(initDict[hyperParams.dMethod])
+        #s_init=decoder.initial_state().set_s(final_coding_state)
         o_init=s_init.output() 
         alpha_init=dy.softmax(dy.concatenate([dy.dot_product(o_init,final_combined_output) for final_combined_output in final_combined_outputs]))
         c_init=attend_vector(final_combined_outputs,alpha_init)
@@ -273,6 +281,96 @@ class Model:
 
         return loss_en,sentence_en
 
+    def greedyDecode(self,sentence_de):
+        model=self.model
+        encoder=self.encoder
+        revcoder=self.revcoder
+        decoder=self.decoder
+        encoder_params=self.encoder_params
+        decoder_params=self.decoder_params
+        downstream=self.config.downstream
+        GRU=self.config.GRU
+        hyperParams=self.hyperParams
+
+        dy.renew_cg() 
+        encoder_lookup=encoder_params["lookup"]
+        decoder_lookup=decoder_params["lookup"]
+        R=dy.parameter(decoder_params["R"])
+        bias=dy.parameter(decoder_params["bias"])
+
+        sentence_de_forward=sentence_de
+        sentence_de_reverse=sentence_de[::-1]
+
+        s=encoder.initial_state()
+        inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_forward]
+        states=s.add_inputs(inputs)
+        encoder_outputs=[s.output() for s in states]
+
+        s_reverse=revcoder.initial_state()
+        inputs=[dy.lookup(encoder_lookup,de) for de in sentence_de_reverse]
+        states_reverse=s_reverse.add_inputs(inputs)
+        revcoder_outputs=[s.output() for s in states_reverse]
+
+        final_coding_output=encoder_outputs[-1]+revcoder_outputs[-1]
+        final_state=states[-1].s()
+        final_state_reverse=states_reverse[-1].s()
+
+        if GRU:
+            final_coding_state=final_state_reverse+final_state
+        else:
+            final_coding_state=((final_state_reverse[0]+final_state[0]),(final_state_reverse[1]+final_state[1]))
+        final_combined_outputs=[revcoder_output+encoder_output for revcoder_output,encoder_output in zip(revcoder_outputs[::-1],encoder_outputs)]
+
+        initDict={}
+        initDict["FORWARD"]=final_state
+        initDict["REVERSE"]=final_state_reverse
+        initDict["BI"]=final_coding_state
+
+        s_init=decoder.initial_state().set_s(initDict[hyperParams.dMethod])
+        #s_init=decoder.initial_state().set_s(final_coding_state)
+        o_init=s_init.output() 
+        alpha_init=dy.softmax(dy.concatenate([dy.dot_product(o_init,final_combined_output) for final_combined_output in final_combined_outputs]))
+        c_init=attend_vector(final_combined_outputs,alpha_init)
+        
+        s_0=s_init
+        o_0=o_init
+        alpha_0=alpha_init
+        c_0=c_init
+        
+
+        losses=[]
+        currentToken=None
+        englishSequence=[]
+
+        while currentToken!=hyperParams.STOP and len(englishSequence)<len(sentence_de)+10:
+            #Calculate loss and append to the losses array
+            scores=None
+            if downstream:
+                scores=R*dy.concatenate([o_0,c_0])+bias
+            else:
+                scores=R*o_0+bias
+            currentToken=np.argmax(scores.npvalue())
+            loss=dy.pickneglogsoftmax(scores,currentToken)
+            losses.append(loss)
+            englishSequence.append(currentToken)
+
+            #Take in input
+            i_t=dy.concatenate([dy.lookup(decoder_lookup,currentToken),c_0])
+            s_t=s_0.add_input(i_t)
+            o_t=s_t.output()
+            alpha_t=dy.softmax(dy.concatenate([dy.dot_product(o_t,final_combined_output) for final_combined_output in final_combined_outputs]))
+            c_t=attend_vector(final_combined_outputs,alpha_t)
+            
+            #Prepare for the next iteration
+            s_0=s_t
+            o_0=o_t
+            c_0=c_t
+            alpha_0=alpha_t
+
+        total_loss=dy.esum(losses)
+        return total_loss,englishSequence
+
+
 
     def greedyDecode(self,sentence_de):
         model=self.model
@@ -314,7 +412,13 @@ class Model:
             final_coding_state=((final_state_reverse[0]+final_state[0]),(final_state_reverse[1]+final_state[1]))
         final_combined_outputs=[revcoder_output+encoder_output for revcoder_output,encoder_output in zip(revcoder_outputs[::-1],encoder_outputs)]
 
-        s_init=decoder.initial_state().set_s(final_state_reverse)
+        initDict={}
+        initDict["FORWARD"]=final_state
+        initDict["REVERSE"]=final_state_reverse
+        initDict["BI"]=final_coding_state
+
+        s_init=decoder.initial_state().set_s(initDict[hyperParams.dMethod])
+        #s_init=decoder.initial_state().set_s(final_coding_state)
         o_init=s_init.output() 
         alpha_init=dy.softmax(dy.concatenate([dy.dot_product(o_init,final_combined_output) for final_combined_output in final_combined_outputs]))
         c_init=attend_vector(final_combined_outputs,alpha_init)
@@ -409,6 +513,35 @@ class Model:
         
         return losses
 
+    def genDecode(self,sentence_de):
+        part1=sentence_de[:sentence_de.index(self.hyperParams.SEPARATOR)]
+        part2=sentence_de[sentence_de.index(self.hyperParams.SEPARATOR)+1:-1]
+        part1=[self.reverse_wids[c] for c in part1]
+        part2=[self.reverse_wids[c] for c in part2]
+        part1=''.join(part1)
+        part2=''.join(part2)
+        parentSet=set()
+        parentSet.add(part1)
+        parentSet.add(part2)
+        candidates=list(utilities.generateCandidates(part1,part2)-parentSet)
+        candidates=[[self.wids[c] for c in candidate]+[self.hyperParams.STOP,] for candidate in candidates]
+        prunedCandidates=[]
+        for candidate in candidates:
+            if len(candidate)>4:
+                prunedCandidates.append(candidate)
+        candidates=prunedCandidates
+        losses=[]
+        for candidate in candidates:
+            loss,words=self.do_one_example(sentence_de,candidate)
+            loss=np.sum(loss.npvalue())
+            losses.append(loss)
+        candidateLosses=zip(candidates,losses)
+        candidateLosses.sort(key= lambda x:x[1])
+
+        print [self.reverse_wids[c] for c in candidateLosses[0][0]]
+        #exit()
+        return candidateLosses[0][1],candidateLosses[0][0] 
+
     def do_one_example(self,sentence_de,sentence_en):
         model=self.model
         encoder=self.encoder
@@ -418,6 +551,7 @@ class Model:
         decoder_params=self.decoder_params
         downstream=self.config.downstream
         GRU=self.config.GRU
+        hyperParams=self.hyperParams
 
         dy.renew_cg()
         total_words=len(sentence_en)
@@ -449,7 +583,13 @@ class Model:
             final_coding_state=((final_state_reverse[0]+final_state[0]),(final_state_reverse[1]+final_state[1]))
         final_combined_outputs=[revcoder_output+encoder_output for revcoder_output,encoder_output in zip(revcoder_outputs[::-1],encoder_outputs)]
 
-        s_init=decoder.initial_state().set_s(final_state_reverse)
+        initDict={}
+        initDict["FORWARD"]=final_state
+        initDict["REVERSE"]=final_state_reverse
+        initDict["BI"]=final_coding_state
+
+        s_init=decoder.initial_state().set_s(initDict[hyperParams.dMethod])
+        #s_init=decoder.initial_state().set_s(final_coding_state)
         o_init=s_init.output() 
         alpha_init=dy.softmax(dy.concatenate([dy.dot_product(o_init,final_combined_output) for final_combined_output in final_combined_outputs]))
         c_init=attend_vector(final_combined_outputs,alpha_init)
@@ -695,7 +835,8 @@ class Model:
                 validLoss,valid_sentence_en_hat=self.greedyDecode(valid_sentence_de)
             elif decodeMethod=="beam":
                 validLoss,valid_sentence_en_hat=self.beamDecode(valid_sentence_de,k=beam_decode_k)
-            
+            elif decodeMethod=="gen":
+                validLoss,valid_sentence_en_hat=self.genDecode(valid_sentence_de)
             #valid_sentence_en_stripped=self.stripStops(valid_sentence_en)
             #valid_sentence_en_hat_stripped=self.stripStops(valid_sentence_en_hat)
 
@@ -790,28 +931,51 @@ if __name__=="__main__":
         GRU=False
         initFromFile=True
         initFileName="../Pretrained/output_embeddings_134iter_lowestValLoss.txt"
+        dMethod="REVERSE"
 
         averageValidMatches=0.0
         averageTestMatches=0.0
         averageValidDistance=0.0
         averageTestDistance=0.0
+
+        averageValidMatchesBest=0.0
+        averageTestMatchesBest=0.0
+        averageValidDistanceBest=0.0
+        averageTestDistanceBest=0.0
+
+
+
         for foldId in range(10):
             config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU,preTrain=preTrain,initFromFile=initFromFile,initFileName=initFileName,foldId=foldId)
-            hyperParams=HyperParams(NUM_EPOCHS=10)
+            hyperParams=HyperParams(NUM_EPOCHS=10,dMethod=dMethod)
 
             predictor=Model(config,hyperParams)
             predictor.train(interEpochPrinting=False)
 
             print "Greedy Decode"
             print "Validation Performance"
-            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
+            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="gen")
             print "Test Performance"
-            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt")
-            
+            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="gen")
+
+
             averageValidMatches+=validMatches
             averageValidDistance+=validDistance
             averageTestMatches+=testMatches
             averageTestDistance+=testDistance
+            
+            predictor.load_model()
+
+            print "Validation Performance Best"
+            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="gen")
+            print "Test Performance Best"
+            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="gen")
+
+            averageValidMatchesBest+=validMatches
+            averageValidDistanceBest+=validDistance
+            averageTestMatchesBest+=testMatches
+            averageTestDistanceBest+=testDistance
+            
 
 
         print "Average Valid Matches",averageValidMatches/10
@@ -819,4 +983,7 @@ if __name__=="__main__":
         print "Average Valid Distance",averageValidDistance/10
         print "Average Test Distance",averageTestDistance/10
 
-
+        print "Average Valid Matches Best",averageValidMatchesBest/10
+        print "Average Test Matches Best",averageTestMatchesBest/10
+        print "Average Valid Distance Best",averageValidDistanceBest/10
+        print "Average Test Distance Best",averageTestDistanceBest/10
