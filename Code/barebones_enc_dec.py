@@ -12,6 +12,16 @@ import copy
 import loadEmbeddingsFile
 import utilities
 
+def fuseDicts(featureDictList):
+    keyList=featureDictList[0].keys()
+    featureDims=len(featureDictList)
+    fusedDict={}
+    for key in keyList:
+        fusedDict[key]=np.zeros(featureDims)
+        for i,dictionary in enumerate(featureDictList):
+            fusedDict[key][i]=dictionary[key]
+    return fusedDict
+
 def attend(encoder_outputs,state_factor_matrix):
     miniBatchLength=state_factor_matrix.npvalue().shape[1]
     encoderOutputLength=state_factor_matrix.npvalue().shape[0]
@@ -513,7 +523,49 @@ class Model:
         
         return losses
 
-    def genDecode(self,sentence_de,useBaseline=False):
+    def learnValPerceptron(self):
+        print "Here"
+        featureVectors=[]
+        weightVector=np.random.rand(2)
+        for sentence in self.valid_sentences:
+            valid_sentence_de=sentence[0]
+            valid_sentence_en=sentence[1]
+            valid_sentence_en_true=''.join([self.reverse_wids[c] for c in valid_sentence_en[:-1]])
+            featureDict1=self.genDecode(valid_sentence_de,mode="c")
+            featureDict2=self.genDecode(valid_sentence_de,mode="c",useBaseline=True)
+            featureDictList=[featureDict1,featureDict2]
+            featureDict=fuseDicts(featureDictList)
+            featureVectors.append((valid_sentence_en_true,featureDict))
+        print "Here2"
+        epochs=100
+        alpha=0.1
+        for epoch in range(epochs):
+            weightUpdate=np.zeros(2)
+            misclassifications=0
+            impossible=0
+            for featureVector in featureVectors:
+                maxKey=None
+                maxScore=-float("inf")
+                for key,value in featureVector[1].items():
+                    newScore=np.dot(weightVector,value)
+                    if newScore>maxScore:
+                        maxScore=newScore
+                        maxKey=key
+                goldKey=featureVector[0]
+                if goldKey not in featureVector[1]:
+                    impossible+=1
+                    continue
+                goldScore=np.dot(weightVector,featureVector[1][goldKey])
+                #print goldKey,maxKey,weightVector
+                if maxKey!=goldKey:
+                    misclassifications+=1
+                    weightUpdate=weightUpdate+alpha*(featureVector[1][goldKey]-featureVector[1][maxKey])
+            print misclassifications
+            print impossible
+            weightVector=weightVector+weightUpdate/len(featureVectors)
+        exit()
+
+    def genDecode(self,sentence_de,useBaseline=False,mixed=False,mode=None):
         part1=sentence_de[:sentence_de.index(self.hyperParams.SEPARATOR)]
         part2=sentence_de[sentence_de.index(self.hyperParams.SEPARATOR)+1:-1]
         part1=[self.reverse_wids[c] for c in part1]
@@ -537,28 +589,55 @@ class Model:
                 loss=np.sum(loss.npvalue())
                 losses.append(loss)
             candidateLosses=zip(candidates,losses)
+           
+            """
+            greedyLoss,greedySequence=self.greedyDecode(sentence_de)
+            greedyLoss=np.sum(greedyLoss.npvalue())
+            candidateLosses.append((greedySequence,greedyLoss))
+            """
             candidateLosses.sort(key= lambda x:x[1])
 
-            print [self.reverse_wids[c] for c in candidateLosses[0][0]]
+            #print [self.reverse_wids[c] for c in candidateLosses[0][0]]
             #exit()
-            return candidateLosses[0][1],candidateLosses[0][0] 
+            if mode==None:
+                return candidateLosses[0][1],candidateLosses[0][0]
+            else:
+                featureDict={}
+                for candidateLoss in candidateLosses:
+                    candidateWord=''.join([self.reverse_wids[c] for c in candidateLoss[0][:-1]])
+                    candidateValue=candidateLoss[1]
+                    featureDict[candidateWord]=candidateValue
+                return featureDict
+
         else:
             prunedCandidates=[]
             for candidate in candidates:
-                if len(candidate)>4:
+                if len(candidate)>3:
                     prunedCandidates.append(candidate)
             candidates=prunedCandidates
             losses=[]
             for candidate in candidates:
-                loss=self.lm_model.getSequenceScore(candidate)
+                loss=-self.lm_model.getSequenceScore(candidate)
                 losses.append(loss)
             candidateLosses=zip(candidates,losses)
             candidateLosses.sort(key=lambda x:x[1])
 
-            print candidateLosses[0][0]
+            #print candidateLosses[0][0]
             bestCandidate=[self.wids[c] for c in candidateLosses[0][0]]+[self.hyperParams.STOP,]
             bestCandidateLoss=candidateLosses[0][1]
-            return bestCandidateLoss,bestCandidate
+
+            if mode==None:
+                return bestCandidateLoss,bestCandidate
+            else:
+                featureDict={}
+                for candidateLoss in candidateLosses:
+                    candidateWord=candidateLoss[0]
+                    candidateValue=candidateLoss[1]
+                    featureDict[candidateWord]=candidateValue
+                return featureDict
+
+
+
 
     def do_one_example(self,sentence_de,sentence_en):
         model=self.model
@@ -663,7 +742,10 @@ class Model:
         self.modelFile=modelFile
         self.bestPerplexity=float("inf")
 
-        if self.config.READ_OPTION=="KNIGHTCROSSVALIDATE":
+        if self.config.READ_OPTION=="NORMALCROSSVALIDATE":
+            train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(filterKnight=False,crossValidate=True,foldId=config.foldId)
+ 
+        elif self.config.READ_OPTION=="KNIGHTCROSSVALIDATE":
             train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(filterKnight=True,crossValidate=True,foldId=config.foldId)
         elif self.config.READ_OPTION=="NORMAL":
             train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(trainingPoints=700,validPoints=400)
@@ -901,7 +983,7 @@ if __name__=="__main__":
 
     if sys.argv[1]=="PLAIN":
         random.seed(491)
-
+        np.random.seed(6000)
         READ_OPTION="KNIGHTONLY"
         preTrain=False
         downstream=True
@@ -954,7 +1036,7 @@ if __name__=="__main__":
         initFromFile=True
         initFileName="../Pretrained/output_embeddings_134iter_lowestValLoss.txt"
         dMethod="REVERSE"
-        decodeMethod="genBase"
+        decodeMethod="gen"
 
         averageValidMatches=0.0
         averageTestMatches=0.0
@@ -975,6 +1057,7 @@ if __name__=="__main__":
             predictor=Model(config,hyperParams)
             predictor.train(interEpochPrinting=False)
 
+            #predictor.learnValPerceptron()
             print "Greedy Decode"
             print "Validation Performance"
             validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
@@ -987,8 +1070,9 @@ if __name__=="__main__":
             averageTestMatches+=testMatches
             averageTestDistance+=testDistance
             
+            """
             predictor.load_model()
-
+            predictor.learnValPerceptron()
             print "Validation Performance Best"
             validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
             print "Test Performance Best"
@@ -998,7 +1082,7 @@ if __name__=="__main__":
             averageValidDistanceBest+=validDistance
             averageTestMatchesBest+=testMatches
             averageTestDistanceBest+=testDistance
-            
+            """
 
 
         print "Average Valid Matches",averageValidMatches/10
@@ -1006,7 +1090,9 @@ if __name__=="__main__":
         print "Average Valid Distance",averageValidDistance/10
         print "Average Test Distance",averageTestDistance/10
 
+        """
         print "Average Valid Matches Best",averageValidMatchesBest/10
         print "Average Test Matches Best",averageTestMatchesBest/10
         print "Average Valid Distance Best",averageValidDistanceBest/10
         print "Average Test Distance Best",averageTestDistanceBest/10
+        """
