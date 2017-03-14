@@ -527,7 +527,8 @@ class Model:
         print "Here"
         featureVectors=[]
         weightVector=np.random.rand(2)
-        for sentence in self.valid_sentences:
+        #return
+        for sentence in self.train_sentences:
             valid_sentence_de=sentence[0]
             valid_sentence_en=sentence[1]
             valid_sentence_en_true=''.join([self.reverse_wids[c] for c in valid_sentence_en[:-1]])
@@ -537,7 +538,7 @@ class Model:
             featureDict=fuseDicts(featureDictList)
             featureVectors.append((valid_sentence_en_true,featureDict))
         print "Here2"
-        epochs=100
+        epochs=20
         alpha=0.1
         for epoch in range(epochs):
             weightUpdate=np.zeros(2)
@@ -560,12 +561,31 @@ class Model:
                 if maxKey!=goldKey:
                     misclassifications+=1
                     weightUpdate=weightUpdate+alpha*(featureVector[1][goldKey]-featureVector[1][maxKey])
-            print misclassifications
-            print impossible
+            print "Misclassifications:",misclassifications
+            print "Impossible",impossible
             weightVector=weightVector+weightUpdate/len(featureVectors)
-        exit()
+        print "Saving Tuned Weights"
+        self.weightVector=weightVector
 
     def genDecode(self,sentence_de,useBaseline=False,mixed=False,mode=None):
+        if mixed==True:
+            featureDict1=self.genDecode(sentence_de,mode="c")
+            featureDict2=self.genDecode(sentence_de,mode="c",useBaseline=True)
+            featureDictList=[featureDict1,featureDict2]
+            featureDict=fuseDicts(featureDictList)
+            maxKey=None
+            maxScore=-float("inf")
+            for key,value in featureDict.items():
+                newScore=np.dot(self.weightVector,value)
+                if newScore>maxScore:
+                    maxScore=newScore
+                    maxKey=key
+            print maxKey
+            charList=list(maxKey)
+            charList=[self.wids[c] for c in charList]
+            charList=charList+[self.hyperParams.STOP,]
+            return 0.0,charList
+
         part1=sentence_de[:sentence_de.index(self.hyperParams.SEPARATOR)]
         part2=sentence_de[sentence_de.index(self.hyperParams.SEPARATOR)+1:-1]
         part1=[self.reverse_wids[c] for c in part1]
@@ -741,6 +761,9 @@ class Model:
         self.hyperParams=hyperParams
         self.modelFile=modelFile
         self.bestPerplexity=float("inf")
+        self.weightVector=np.zeros(2)
+        self.weightVector[0]=-1.0
+        self.weightVector[1]=0.0
 
         if self.config.READ_OPTION=="NORMALCROSSVALIDATE":
             train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(filterKnight=False,crossValidate=True,foldId=config.foldId)
@@ -938,6 +961,8 @@ class Model:
                 validLoss,valid_sentence_en_hat=self.beamDecode(valid_sentence_de,k=beam_decode_k)
             elif decodeMethod=="gen":
                 validLoss,valid_sentence_en_hat=self.genDecode(valid_sentence_de)
+            elif decodeMethod=="genMixed":
+                validLoss,valid_sentence_en_hat=self.genDecode(valid_sentence_de,mixed=True)
             elif decodeMethod=="genBase":
                 validLoss,valid_sentence_en_hat=self.genDecode(valid_sentence_de,useBaseline=True)
  
@@ -1036,7 +1061,7 @@ if __name__=="__main__":
         initFromFile=True
         initFileName="../Pretrained/output_embeddings_134iter_lowestValLoss.txt"
         dMethod="REVERSE"
-        decodeMethod="gen"
+        decodeMethod="genMixed"
 
         averageValidMatches=0.0
         averageTestMatches=0.0
@@ -1057,7 +1082,7 @@ if __name__=="__main__":
             predictor=Model(config,hyperParams)
             predictor.train(interEpochPrinting=False)
 
-            #predictor.learnValPerceptron()
+            predictor.learnValPerceptron()
             print "Greedy Decode"
             print "Validation Performance"
             validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
