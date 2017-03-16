@@ -523,54 +523,80 @@ class Model:
         
         return losses
 
-    def learnValPerceptron(self):
+    def learnValPerceptron(self,topK=True):
         print "Here"
         featureVectors=[]
-        weightVector=np.random.rand(2)
+        #weightVector=np.random.rand(2)
+        weightVector=np.zeros(2)
+        weightVector[0]=-1.0
+        weightVector[1]=0.0
         #return
         for sentence in self.train_sentences:
             valid_sentence_de=sentence[0]
             valid_sentence_en=sentence[1]
             valid_sentence_en_true=''.join([self.reverse_wids[c] for c in valid_sentence_en[:-1]])
             featureDict1=self.genDecode(valid_sentence_de,mode="c")
-            featureDict2=self.genDecode(valid_sentence_de,mode="c",useBaseline=True)
+            if topK==False:
+                featureDict2=self.genDecode(valid_sentence_de,mode="c",useBaseline=True)
+            else:
+                keyValList=[(key,value) for key,value in featureDict1.items()]
+                keyValList.sort(key = lambda x:x[1])
+                keyValList=keyValList[:10]
+                featureDict1={}
+                for x in keyValList:
+                    featureDict1[x[0]]=x[1]
+                #print len(featureDict1)
+                featureDict2={}
+                for key in featureDict1:
+                    featureDict2[key]=-self.lm_model.getSequenceScore(key)
             featureDictList=[featureDict1,featureDict2]
             featureDict=fuseDicts(featureDictList)
             featureVectors.append((valid_sentence_en_true,featureDict))
         print "Here2"
-        epochs=20
+        epochs=50
         alpha=0.1
         for epoch in range(epochs):
             weightUpdate=np.zeros(2)
             misclassifications=0
             impossible=0
             for featureVector in featureVectors:
-                maxKey=None
-                maxScore=-float("inf")
+                Z=0.0
+                lagTerm=np.zeros(2)
                 for key,value in featureVector[1].items():
                     newScore=np.dot(weightVector,value)
-                    if newScore>maxScore:
-                        maxScore=newScore
-                        maxKey=key
+                    expWeight=math.exp(newScore)
+                    Z+=expWeight
+                    lagTerm+=expWeight*value
+
                 goldKey=featureVector[0]
                 if goldKey not in featureVector[1]:
                     impossible+=1
                     continue
-                goldScore=np.dot(weightVector,featureVector[1][goldKey])
-                #print goldKey,maxKey,weightVector
-                if maxKey!=goldKey:
-                    misclassifications+=1
-                    weightUpdate=weightUpdate+alpha*(featureVector[1][goldKey]-featureVector[1][maxKey])
-            print "Misclassifications:",misclassifications
+ 
+                lagTerm=lagTerm/Z
+                weightVector=weightVector+alpha*(featureVector[1][goldKey]-lagTerm)
+
             print "Impossible",impossible
-            weightVector=weightVector+weightUpdate/len(featureVectors)
+            #weightVector=weightVector+weightUpdate/len(featureVectors)
         print "Saving Tuned Weights"
         self.weightVector=weightVector
 
-    def genDecode(self,sentence_de,useBaseline=False,mixed=False,mode=None):
+    def genDecode(self,sentence_de,useBaseline=False,mixed=False,mode=None,topK=True):
         if mixed==True:
             featureDict1=self.genDecode(sentence_de,mode="c")
-            featureDict2=self.genDecode(sentence_de,mode="c",useBaseline=True)
+            if topK==False:
+                featureDict2=self.genDecode(valid_sentence_de,mode="c",useBaseline=True)
+            else:
+                keyValList=[(key,value) for key,value in featureDict1.items()]
+                keyValList.sort(key = lambda x:x[1])
+                keyValList=keyValList[:10]
+                featureDict1={}
+                for x in keyValList:
+                    featureDict1[x[0]]=x[1]
+                featureDict2={}
+                for key in featureDict1:
+                    featureDict2[key]=-self.lm_model.getSequenceScore(key)
+
             featureDictList=[featureDict1,featureDict2]
             featureDict=fuseDicts(featureDictList)
             maxKey=None
@@ -1061,7 +1087,7 @@ if __name__=="__main__":
         initFromFile=True
         initFileName="../Pretrained/output_embeddings_134iter_lowestValLoss.txt"
         dMethod="REVERSE"
-        decodeMethod="genMixed"
+        decodeMethod="gen"
 
         averageValidMatches=0.0
         averageTestMatches=0.0
@@ -1082,7 +1108,7 @@ if __name__=="__main__":
             predictor=Model(config,hyperParams)
             predictor.train(interEpochPrinting=False)
 
-            predictor.learnValPerceptron()
+            #predictor.learnValPerceptron()
             print "Greedy Decode"
             print "Validation Performance"
             validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
@@ -1095,9 +1121,9 @@ if __name__=="__main__":
             averageTestMatches+=testMatches
             averageTestDistance+=testDistance
             
-            """
+            
             predictor.load_model()
-            predictor.learnValPerceptron()
+            #predictor.learnValPerceptron()
             print "Validation Performance Best"
             validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
             print "Test Performance Best"
@@ -1107,17 +1133,16 @@ if __name__=="__main__":
             averageValidDistanceBest+=validDistance
             averageTestMatchesBest+=testMatches
             averageTestDistanceBest+=testDistance
-            """
+            
 
-
+        print "---------Final Aggregates---------------"
         print "Average Valid Matches",averageValidMatches/10
         print "Average Test Matches",averageTestMatches/10
         print "Average Valid Distance",averageValidDistance/10
         print "Average Test Distance",averageTestDistance/10
 
-        """
+        
         print "Average Valid Matches Best",averageValidMatchesBest/10
         print "Average Test Matches Best",averageTestMatchesBest/10
         print "Average Valid Distance Best",averageValidDistanceBest/10
         print "Average Test Distance Best",averageTestDistanceBest/10
-        """
