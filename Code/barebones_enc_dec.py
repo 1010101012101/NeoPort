@@ -1108,7 +1108,9 @@ if __name__=="__main__":
             predictor=Model(config,hyperParams)
             predictor.train(interEpochPrinting=False)
 
-            #predictor.learnValPerceptron()
+            if decodeMethod=="genMixed":
+                predictor.learnValPerceptron()
+
             print "Greedy Decode"
             print "Validation Performance"
             validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
@@ -1121,9 +1123,12 @@ if __name__=="__main__":
             averageTestMatches+=testMatches
             averageTestDistance+=testDistance
             
-            
+            print "Loading Best Decoder Model w.r.t Val Perplexity"
             predictor.load_model()
-            #predictor.learnValPerceptron()
+
+            if decodeMethod=="genMixed":
+                predictor.learnValPerceptron()
+
             print "Validation Performance Best"
             validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
             print "Test Performance Best"
