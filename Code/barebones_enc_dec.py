@@ -581,7 +581,7 @@ class Model:
         print "Saving Tuned Weights"
         self.weightVector=weightVector
 
-    def genDecode(self,sentence_de,useBaseline=False,mixed=False,mode=None,topK=True):
+    def genDecode(self,sentence_de,useBaseline=False,mixed=False,mode=None,topK=True,outFile=None):
         if mixed==True:
             featureDict1=self.genDecode(sentence_de,mode="c")
             if topK==False:
@@ -642,6 +642,12 @@ class Model:
             candidateLosses.append((greedySequence,greedyLoss))
             """
             candidateLosses.sort(key= lambda x:x[1])
+            
+            if outFile!=None:
+                for candidateLoss in candidateLosses:
+                    candidateWord=''.join([self.reverse_wids[c] for c in candidateLoss[0][:-1]])
+                    candidateValue=candidateLoss[1]
+                    outFile.write(candidateWord+":"+str(candidateValue)+"\n")
 
             #print [self.reverse_wids[c] for c in candidateLosses[0][0]]
             #exit()
@@ -965,7 +971,7 @@ class Model:
         else:
             return sentence
 
-    def testOut(self,valid_sentences,verbose=True,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="greedy",beam_decode_k=1):
+    def testOut(self,valid_sentences,verbose=True,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod="greedy",beam_decode_k=1,outFileName=None):
         reverse_wids=self.reverse_wids
 
         if self.config.READ_OPTION=="PHONETICINPUT" or self.config.READ_OPTION=="PHONOLEXINPUT":
@@ -973,6 +979,10 @@ class Model:
 
         originalWordFile=open(originalFileName,"w")
         outputWordFile=open(outputFileName,"w")
+        if outFileName!=None:
+            outFile=open(outFileName,"w")
+        else:
+            outFile=None
         import editdistance
         exactMatches=0
         editDistance=0.0
@@ -986,7 +996,7 @@ class Model:
             elif decodeMethod=="beam":
                 validLoss,valid_sentence_en_hat=self.beamDecode(valid_sentence_de,k=beam_decode_k)
             elif decodeMethod=="gen":
-                validLoss,valid_sentence_en_hat=self.genDecode(valid_sentence_de)
+                validLoss,valid_sentence_en_hat=self.genDecode(valid_sentence_de,outFile=outFile)
             elif decodeMethod=="genMixed":
                 validLoss,valid_sentence_en_hat=self.genDecode(valid_sentence_de,mixed=True)
             elif decodeMethod=="genBase":
@@ -997,7 +1007,12 @@ class Model:
 
             originalWord="".join([reverse_wids[c] for c in valid_sentence_en[:-1]])
             outputWord="".join([reverse_wids[c] for c in valid_sentence_en_hat[:-1]])
-    
+            
+            if outFile!=None:
+                outFile.write("Original Word:"+originalWord+"\n")
+                outFile.write("Output Word:"+outputWord+"\n")
+                outFile.write("End of Example--------------------------------------"+"\n")
+            
             if originalWord==outputWord:
                 exactMatches+=1
 
@@ -1026,7 +1041,10 @@ class Model:
 
         originalWordFile.close()
         outputWordFile.close()
-        
+
+        if outFile!=None:
+            outFile.close()
+
         return exactMatches,(editDistance+0.0)/(totalWords+0.0)
         
 
@@ -1113,9 +1131,9 @@ if __name__=="__main__":
 
             print "Greedy Decode"
             print "Validation Performance"
-            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
+            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,decodeMethod=decodeMethod,outFileName="outputDir/"+"final"+"_"+str(foldId)+"_"+"validation.txt")
             print "Test Performance"
-            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
+            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,decodeMethod=decodeMethod,outFileName="outputDir/"+"final"+"_"+str(foldId)+"_"+"test.txt")
 
 
             averageValidMatches+=validMatches
@@ -1130,9 +1148,9 @@ if __name__=="__main__":
                 predictor.learnValPerceptron()
 
             print "Validation Performance Best"
-            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
+            validMatches,validDistance=predictor.testOut(predictor.valid_sentences,verbose=False,decodeMethod=decodeMethod,outFileName="outputDir/"+"best"+"_"+str(foldId)+"_"+"validation.txt")
             print "Test Performance Best"
-            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,originalFileName="originalWords.txt",outputFileName="outputWords.txt",decodeMethod=decodeMethod)
+            testMatches,testDistance=predictor.testOut(predictor.test_sentences,verbose=False,decodeMethod=decodeMethod,outFileName="outputDir/"+"best"+"_"+str(foldId)+"_"+"test.txt")
 
             averageValidMatchesBest+=validMatches
             averageValidDistanceBest+=validDistance
