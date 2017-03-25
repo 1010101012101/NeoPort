@@ -28,8 +28,10 @@ def getData(trainingPoints=700,validPoints=300,filterKnight=False,crossValidate=
     wids=defaultdict(lambda: 0)
     wids["STOP"]=0
     wids["SEPARATOR"]=1
+    #wids["EPSILON"]=2
     STOP=0
     SEPARATOR=1
+    #EPSILON=2
 
     for c in ascii_lowercase:
         wids[c]=len(wids)

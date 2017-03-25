@@ -11,6 +11,7 @@ import nltk
 import copy
 import loadEmbeddingsFile
 import utilities
+import aligner
 
 def fuseDicts(featureDictList):
     keyList=featureDictList[0].keys()
@@ -137,7 +138,7 @@ class Config:
     sharing=False
     GRU=False
 
-    def __init__(self,READ_OPTION="NORMAL",downstream=True,sharing=False,GRU=False,preTrain=False,initFromFile=False,initFileName=None,foldId=None):
+    def __init__(self,READ_OPTION="NORMAL",downstream=True,sharing=False,GRU=False,preTrain=False,initFromFile=False,initFileName=None,foldId=None,TRAIN_REVERSE=False,trainMethod="NORMAL"):
         self.READ_OPTION=READ_OPTION
         self.downstream=downstream
         self.sharing=sharing
@@ -146,6 +147,8 @@ class Config:
         self.initFromFile=initFromFile
         self.initFileName=initFileName
         self.foldId=foldId
+        self.TRAIN_REVERSE=TRAIN_REVERSE
+        self.trainMethod=trainMethod  
 
 class HyperParams:
     EMB_SIZE=None
@@ -154,8 +157,8 @@ class HyperParams:
     NUM_EPOCHS=None
     STOP=None
     SEPARATOR=None
-
-    def __init__(self,EMB_SIZE=50,LAYER_DEPTH=1,HIDDEN_SIZE=100,NUM_EPOCHS=10,STOP=0,SEPARATOR=1,dMethod="REVERSE"):
+    
+    def __init__(self,EMB_SIZE=50,LAYER_DEPTH=1,HIDDEN_SIZE=100,NUM_EPOCHS=10,STOP=0,SEPARATOR=1,dMethod="REVERSE",OPTIMIZER="SGD"):
         #Hyperparameter Definition
         self.EMB_SIZE=EMB_SIZE
         self.LAYER_DEPTH=LAYER_DEPTH
@@ -164,6 +167,7 @@ class HyperParams:
         self.STOP=STOP
         self.SEPARATOR=SEPARATOR
         self.dMethod=dMethod
+        self.OPTIMIZER=OPTIMIZER
 
 def equalSequence(x,y):
     if len(x)!=len(y):
@@ -631,11 +635,33 @@ class Model:
             candidates=prunedCandidates
             losses=[]
             for candidate in candidates:
-                loss,words=self.do_one_example(sentence_de,candidate)
+                loss=None
+                if self.config.trainMethod=="KEEPGEN" or self.config.trainMethod=="KEEPDELETE":
+                    a=aligner.findAlignment(sentence_de,candidate,epsilon=self.hyperParams.SEPARATOR,SEPARATOR=self.hyperParams.SEPARATOR,mode=self.config.trainMethod,KEEP=2)
+                    loss,words=self.do_one_example(sentence_de,a)
+                else:
+                    loss,words=self.do_one_example(sentence_de,candidate)
                 loss=np.sum(loss.npvalue())
                 losses.append(loss)
             candidateLosses=zip(candidates,losses)
-           
+            
+            if self.config.TRAIN_REVERSE:
+                newCandidateLosses=[]
+                for candidateLoss in candidateLosses:
+                    candidate=candidateLoss[0]
+                    loss=candidateLoss[1]
+                    textCandidate=''.join([self.reverse_wids[c] for c in candidate[:-1]])
+                    lmLoss=-self.lm_model.getSequenceScore(textCandidate)
+                    if self.externalModel!=None:
+                        loss2,words=self.externalModel.do_one_example(sentence_de,candidate)
+                        loss2=np.sum(loss2.npvalue())
+                        loss+=lmLoss
+                        alpha=0.9
+                        newLoss=(candidate,math.log(alpha*math.exp(loss)+(1-alpha)*math.exp(loss2)))
+                    else:
+                        newLoss=(candidate,loss+lmLoss)
+                    newCandidateLosses.append(newLoss)
+                candidateLosses=newCandidateLosses
             """
             greedyLoss,greedySequence=self.greedyDecode(sentence_de)
             greedyLoss=np.sum(greedyLoss.npvalue())
@@ -702,10 +728,18 @@ class Model:
         GRU=self.config.GRU
         hyperParams=self.hyperParams
 
+        if self.config.TRAIN_REVERSE:
+            #Swap
+            x=sentence_de
+            sentence_de=sentence_en
+            sentence_en=x
+
         dy.renew_cg()
         total_words=len(sentence_en)
         encoder_lookup=encoder_params["lookup"]
         decoder_lookup=decoder_params["lookup"]
+        if self.config.trainMethod=="KEEPDELETE":
+            decoder_action_lookup=decoder_params["action_lookup"]
         R=dy.parameter(decoder_params["R"])
         bias=dy.parameter(decoder_params["bias"])
 
@@ -752,7 +786,7 @@ class Model:
 
         losses=[]
         
-        for en in sentence_en:
+        for enIndex,en in enumerate(sentence_en):
             #Calculate loss and append to the losses array
             scores=None
             if downstream:
@@ -763,7 +797,11 @@ class Model:
             losses.append(loss)
 
             #Take in input
-            i_t=dy.concatenate([dy.lookup(decoder_lookup,en),c_0])
+            i_t=None
+            if self.config.trainMethod=="KEEPDELETE":
+                i_t=dy.concatenate([dy.lookup(decoder_lookup,sentence_de[enIndex]),dy.lookup(decoder_action_lookup,en),c_0])
+            else:
+                i_t=dy.concatenate([dy.lookup(decoder_lookup,en),c_0])
             s_t=s_0.add_input(i_t)
             o_t=s_t.output()
             alpha_t=dy.softmax(dy.concatenate([dy.dot_product(o_t,final_combined_output) for final_combined_output in final_combined_outputs]))
@@ -780,12 +818,18 @@ class Model:
 
     def save_model(self):
         print "Saving Model"
-        self.model.save(self.modelFile,[self.encoder,self.revcoder,self.decoder,self.encoder_params["lookup"],self.decoder_params["lookup"],self.decoder_params["R"],self.decoder_params["bias"]])
+        if self.config.trainMethod=="KEEPDELETE":
+            self.model.save(self.modelFile,[self.encoder,self.revcoder,self.decoder,self.encoder_params["lookup"],self.decoder_params["lookup"],self.decoder_params["action_lookup"],self.decoder_params["R"],self.decoder_params["bias"]])
+        else:
+            self.model.save(self.modelFile,[self.encoder,self.revcoder,self.decoder,self.encoder_params["lookup"],self.decoder_params["lookup"],self.decoder_params["R"],self.decoder_params["bias"]])
         print "Model Saved"
 
     def load_model(self):
         print "Loading Model"
-        (self.encoder,self.revcoder,self.decoder,self.encoder_params["lookup"],self.decoder_params["lookup"],self.decoder_params["R"],self.decoder_params["bias"])=self.model.load(self.modelFile)
+        if self.config.trainMethod=="KEEPDELETE":
+            (self.encoder,self.revcoder,self.decoder,self.encoder_params["lookup"],self.decoder_params["lookup"],self.decoder_params["action_lookup"],self.decoder_params["R"],self.decoder_params["bias"])=self.model.load(self.modelFile)
+        else:
+            (self.encoder,self.revcoder,self.decoder,self.encoder_params["lookup"],self.decoder_params["lookup"],self.decoder_params["R"],self.decoder_params["bias"])=self.model.load(self.modelFile)
         print "Model Loaded"
 
     def __init__(self,config,hyperParams,modelFile="Buffer/model"):
@@ -796,7 +840,7 @@ class Model:
         self.weightVector=np.zeros(2)
         self.weightVector[0]=-1.0
         self.weightVector[1]=0.0
-
+        self.externalModel=None
         if self.config.READ_OPTION=="NORMALCROSSVALIDATE":
             train_sentences_de,train_sentences_en,valid_sentences_de,valid_sentences_en,test_sentences_de,test_sentences_en,wids=readData.getData(filterKnight=False,crossValidate=True,foldId=config.foldId)
  
@@ -860,6 +904,8 @@ class Model:
             self.encoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
             self.revcoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE,hyperParams.HIDDEN_SIZE,model)
             self.decoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE+hyperParams.HIDDEN_SIZE,hyperParams.HIDDEN_SIZE,model)
+            if self.config.trainMethod=="KEEPDELETE":
+                self.decoder=dy.LSTMBuilder(hyperParams.LAYER_DEPTH,hyperParams.EMB_SIZE+10+hyperParams.HIDDEN_SIZE,hyperParams.HIDDEN_SIZE,model)
 
         if self.config.initFromFile:
             if self.config.READ_OPTION=="PHONETICINPUT":
@@ -867,7 +913,9 @@ class Model:
                 exit()
             preEmbeddings=loadEmbeddingsFile.loadEmbeddings(wids,self.config.initFileName,hyperParams.EMB_SIZE)
             
-    
+        #if self.config.trainMethod=="KEEPDELETE":
+        #    VOCAB_SIZE_EN=3
+
         self.encoder_params={}
         self.encoder_params["lookup"]=model.add_lookup_parameters((self.VOCAB_SIZE_DE,hyperParams.EMB_SIZE))
         
@@ -880,15 +928,27 @@ class Model:
         else:
             self.decoder_params["lookup"]=model.add_lookup_parameters((self.VOCAB_SIZE_EN,hyperParams.EMB_SIZE))
 
+        if self.config.trainMethod=="KEEPDELETE":
+            self.decoder_params["action_lookup"]=model.add_lookup_parameters((3,10))
+
         if self.config.initFromFile:
             self.decoder_params["lookup"].init_from_array(preEmbeddings)
 
         if config.downstream:
             self.decoder_params["R"]=model.add_parameters((self.VOCAB_SIZE_EN,2*hyperParams.HIDDEN_SIZE))
+            if self.config.trainMethod=="KEEPDELETE":
+                self.decoder_params["R"]=model.add_parameters((3,2*hyperParams.HIDDEN_SIZE))
+ 
         else:
             self.decoder_params["R"]=model.add_parameters((self.VOCAB_SIZE_EN,hyperParams.HIDDEN_SIZE))
+            if self.config.trainMethod=="KEEPDELETE":
+                self.decoder_params["R"]=model.add_parameters((3,hyperParams.HIDDEN_SIZE))
+     
 
         self.decoder_params["bias"]=model.add_parameters((self.VOCAB_SIZE_EN))
+        if self.config.trainMethod=="KEEPDELETE":
+            self.decoder_params["bias"]=model.add_parameters((3))
+
 
         if config.preTrain:
             self.encoder_params["R_DE"]=model.add_parameters((self.VOCAB_SIZE_DE,hyperParams.HIDDEN_SIZE))
@@ -918,9 +978,53 @@ class Model:
             print "Pretraining"
             self.pretrain()
 
-        trainer=dy.SimpleSGDTrainer(self.model)
+        if self.config.trainMethod=="KEEPGEN" or self.config.trainMethod=="KEEPDELETE":
+            print "Trimming Training Set"
+            aux_train_sentences=[]
+            aux_valid_sentences=[]
+            goodInstances=0
+            badInstances=0
+            for train_sentence in self.train_sentences:
+                sentence_de=train_sentence[0]
+                sentence_en=train_sentence[1]
+                a=aligner.findAlignment(sentence_de,sentence_en,epsilon=self.hyperParams.SEPARATOR,SEPARATOR=self.hyperParams.SEPARATOR,mode=self.config.trainMethod,KEEP=2)
+                if a==[]:
+                    badInstances+=0
+                else:
+                    if len(sentence_de)!=len(a):
+                        print "Assertion Failed" 
+                    aux_train_sentences.append((sentence_de,a))
+            self.train_sentences=aux_train_sentences
+
+            for train_sentence in self.valid_sentences:
+                sentence_de=train_sentence[0]
+                sentence_en=train_sentence[1]
+                a=aligner.findAlignment(sentence_de,sentence_en,epsilon=self.hyperParams.SEPARATOR,SEPARATOR=self.hyperParams.SEPARATOR,mode=self.config.trainMethod,KEEP=2)
+                if a==[]:
+                    badInstances+=0
+                    badInstances+=1
+                    #print [self.reverse_wids[c] for c in sentence_de]
+                    #print [self.reverse_wids[c] for c in sentence_en]
+                else:
+                    if len(sentence_de)!=len(a):
+                        print "Assertion Failed"
+                    goodInstances+=1
+                    aux_valid_sentences.append((sentence_de,a))
+            self.train_sentences=aux_train_sentences
+            self.aux_valid_sentences=aux_valid_sentences
+
+            print "Good Instances",goodInstances
+            print "Bad Instances",badInstances
+            #exit()
+            #self.aux_valid_sentences=[]
+
+        if self.hyperParams.OPTIMIZER=="Adam":
+            trainer=dy.AdamTrainer(self.model)
+        else:
+            trainer=dy.SimpleSGDTrainer(self.model)
+
         totalSentences=0
-        for epochId in xrange(hyperParams.NUM_EPOCHS):    
+        for epochId in xrange(self.hyperParams.NUM_EPOCHS):    
             random.shuffle(self.train_sentences)
             for sentenceId,sentence in enumerate(self.train_sentences):
                 totalSentences+=1
@@ -936,7 +1040,12 @@ class Model:
                         perplexity=0.0
                         totalLoss=0.0
                         totalWords=0.0
-                        for valid_sentence in self.valid_sentences:
+                        valid_sentences=None
+                        if self.config.trainMethod=="KEEPGEN" or self.config.trainMethod=="KEEPDELETE":
+                            valid_sentences=self.aux_valid_sentences
+                        else:
+                            valid_sentences=self.valid_sentences
+                        for valid_sentence in valid_sentences:
                             valid_sentence_de=valid_sentence[0]
                             valid_sentence_en=valid_sentence[1]
                             validLoss,words=self.do_one_example(valid_sentence_de,valid_sentence_en)
@@ -950,7 +1059,11 @@ class Model:
             perplexity=0.0
             totalLoss=0.0
             totalWords=0.0
-            for valid_sentence in self.valid_sentences:
+            if self.config.trainMethod=="KEEPGEN" or self.config.trainMethod=="KEEPDELETE":
+                valid_sentences=self.aux_valid_sentences
+            else:
+                valid_sentences=self.valid_sentences
+            for valid_sentence in valid_sentences:
                 valid_sentence_de=valid_sentence[0]
                 valid_sentence_en=valid_sentence[1]
                 validLoss,words=self.do_one_example(valid_sentence_de,valid_sentence_en)
@@ -1102,10 +1215,16 @@ if __name__=="__main__":
         downstream=True
         sharing=False
         GRU=False
-        initFromFile=True
+        initFromFile=False
         initFileName="../Pretrained/output_embeddings_134iter_lowestValLoss.txt"
         dMethod="REVERSE"
         decodeMethod="gen"
+        TRAIN_REVERSE=False
+        bothWays=False
+        trainMethod="NORMAL"
+        EMB_SIZE=75
+        HIDDEN_SIZE=150
+        OPTIMIZER="SGD"
 
         averageValidMatches=0.0
         averageTestMatches=0.0
@@ -1120,12 +1239,17 @@ if __name__=="__main__":
 
 
         for foldId in range(10):
-            config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU,preTrain=preTrain,initFromFile=initFromFile,initFileName=initFileName,foldId=foldId)
-            hyperParams=HyperParams(NUM_EPOCHS=10,dMethod=dMethod)
+            config=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU,preTrain=preTrain,initFromFile=initFromFile,initFileName=initFileName,foldId=foldId,TRAIN_REVERSE=TRAIN_REVERSE,trainMethod=trainMethod)
+            hyperParams=HyperParams(NUM_EPOCHS=10,dMethod=dMethod,HIDDEN_SIZE=HIDDEN_SIZE,EMB_SIZE=EMB_SIZE,OPTIMIZER=OPTIMIZER)
 
             predictor=Model(config,hyperParams)
             predictor.train(interEpochPrinting=False)
-
+            if bothWays:
+                extConfig=Config(READ_OPTION=READ_OPTION,downstream=downstream,sharing=sharing,GRU=GRU,preTrain=preTrain,initFromFile=initFromFile,initFileName=initFileName,foldId=foldId,TRAIN_REVERSE=False)
+                extHyperParams=HyperParams(NUM_EPOCHS=10,dMethod=dMethod)
+                extPredictor=Model(extConfig,extHyperParams,modelFile="Buffer/extModel")
+                extPredictor.train(interEpochPrinting=False)
+                predictor.externalModel=extPredictor 
             if decodeMethod=="genMixed":
                 predictor.learnValPerceptron()
 
@@ -1143,7 +1267,8 @@ if __name__=="__main__":
             
             print "Loading Best Decoder Model w.r.t Val Perplexity"
             predictor.load_model()
-
+            if bothWays:
+                predictor.externalModel.load_model()
             if decodeMethod=="genMixed":
                 predictor.learnValPerceptron()
 
