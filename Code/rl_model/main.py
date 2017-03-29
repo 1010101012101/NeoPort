@@ -13,6 +13,10 @@ from keras.callbacks import ModelCheckpoint
 import sys
 import random
 import keras
+import matplotlib.pyplot as plt
+
+sys.path.insert(0, sys.path[0]+'../')
+print sys.path
 
 
 def sampleFromDistribution(vals):
@@ -25,35 +29,36 @@ def sampleFromDistribution(vals):
             return i
     return len(vals)-1
 
-import matplotlib.pyplot as plt
 
-def main():
-
+def trainSimpleModel():
     environment = environments.SampleEnvironment()
     obs = environment.reset()
-    lim = 100
-    for t in range(lim): 
-        print obs
-        a = 0 #np.random.randint(0, environment.actions_space_size)
-        obs,reward, done = environment.performStep( a )
-        print a, reward
-        print "--------"
-        if done:
-            print "over"
-            break
-
-    agent = models.Agent()            
+    lim = 100 # max num of episodes
+    num_episodes = 1500
+    agent = models.SimpleAgent()            
     params = dict(actions_space_size=environment.actions_space_size, 
         state_size=environment.state_space_size,
         value_model_hidden_rep_size=10
         )
     agent.getPolicyValueModels(params)
 
+    #debug
+    if False:
+        for t in range(lim): 
+            print obs
+            a = 0 #np.random.randint(0, environment.actions_space_size)
+            obs,reward, done = environment.performStep( a )
+            print a, reward
+            print "--------"
+            if done:
+                print "over"
+                break
+
     all_rewards = []
     cor_ans = []
     cor_prob0 = []
     cor_prob1 = []
-    for episode in range(400):
+    for episode in range(num_episodes):
         print "======================================= "
         print "episode : ",episode
         obs = environment.reset()
@@ -143,7 +148,7 @@ def main():
     plt.plot(cor_prob0)
     plt.show()
     plt.plot(cor_prob1)
-    plt.show()    
+    plt.show() 
 
-if __name__ == "__main__":
-    main()
+
+trainSimpleModel()

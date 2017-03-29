@@ -11,7 +11,7 @@ from keras.layers import Input, Embedding, LSTM, Dense, merge, SimpleRNN
 import keras.backend as K
 import keras
 
-class Agent:
+class SimpleAgent:
 	def __init__(self):
 		self.policy_model = None
 		self.value_model = None
